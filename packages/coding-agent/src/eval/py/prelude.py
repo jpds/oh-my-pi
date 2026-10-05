@@ -379,7 +379,11 @@ if "__omp_prelude_loaded__" not in globals():
         token = os.environ.get("PI_TOOL_BRIDGE_TOKEN")
         session = os.environ.get("PI_TOOL_BRIDGE_SESSION")
         if not base or not token or not session:
-            raise RuntimeError("tool bridge is unavailable in this kernel")
+            raise RuntimeError(
+                "tool bridge is unavailable in this kernel "
+                "(no PI_TOOL_BRIDGE_URL; the host tool bridge may be disabled via PI_NO_TOOL_BRIDGE=1 "
+                "or no tool session is attached to this kernel)"
+            )
         return (base.rstrip("/"), token, session)
 
     import urllib.error, urllib.request

@@ -272,6 +272,10 @@
 - Fixed `omp worktree add` and other git operations failing with `git open: … does not appear to be a git repository` when the checkout directory name ends in `.git` ([#14553](https://github.com/can1357/oh-my-pi/issues/14553))
 - Fixed Mnemopi embedding workers (and other local-model workers) staying alive and holding gigabytes of RAM after the omp process that started them exited mid-embedding ([#14340](https://github.com/can1357/oh-my-pi/issues/14340))
 - Fixed a supervised PTY service on Windows hanging when it asks the terminal for the cursor position; the launch broker now answers the query as it does on Linux and macOS
+### Added
+
+- `PI_NO_TOOL_BRIDGE=1` skips the eval tool bridge entirely (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers fail fast with a typed, actionable error instead of dialing an unreachable endpoint.
+
 ### Changed
 
 - Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
