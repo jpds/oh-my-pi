@@ -405,7 +405,9 @@ async function ensureKernelAvailable(cwd: string, options: PythonExecutorOptions
 
 /**
  * `PI_NO_TOOL_BRIDGE=1` skips the HTTP bridge entirely; host-mediated helpers
- * then run over the runner's stdio host-request channel instead.
+ * then run over the runner's stdio host-request channel, and when no channel
+ * exists they fail fast with the typed missing-env error. `judge`/`judge_batch`
+ * keep working through `PI_JUDGE_DIRECT`.
  */
 function toolBridgeDisabled(): boolean {
 	const raw = Bun.env.PI_NO_TOOL_BRIDGE?.trim().toLowerCase();
