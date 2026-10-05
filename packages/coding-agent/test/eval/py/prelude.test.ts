@@ -232,6 +232,226 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		}),
 	});
 
+	it("judge() POSTs the System One wire format directly and surfaces bool answers", async () => {
+		const requests: { url: string; authorization: string; body: unknown }[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async request => {
+				requests.push({
+					url: new URL(request.url).pathname,
+					authorization: request.headers.get("authorization") ?? "",
+					body: await request.json(),
+				});
+				return Response.json({
+					model: "jev-preview",
+					answers: {
+						ok: { type: "noul", noul: 1 },
+						pick: { type: "choice", choice: "b", confidence: 0.9, probabilities: { a: 0.1, b: 0.9 } },
+					},
+					usage: { input_tokens: 5, output_tokens: 7 },
+				});
+			},
+		});
+
+		try {
+			const result = await runPrelude(
+				[
+					"async def main():",
+					'    answers = await judge("hello", {',
+					'        "ok": {"type": "bool", "instructions": "fake?", "criteria": {"true": "yes please", "false": "no"}},',
+					'        "pick": {"type": "choice", "instructions": "which?", "criteria": {"a": None, "b": "bee"}},',
+					"    })",
+					"    print(json.dumps(answers, sort_keys=True))",
+					"asyncio.run(main())",
+				].join("\n"),
+				DIRECT_ENV(server.url.toString()),
+			);
+
+			expect(result.stderr).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout.trim())).toEqual({
+				ok: { type: "bool", bool: 1 },
+				pick: { type: "choice", choice: "b", confidence: 0.9, probabilities: { a: 0.1, b: 0.9 } },
+			});
+			expect(requests).toEqual([
+				{
+					url: "/v1/systemone",
+					authorization: "Bearer ts-key",
+					body: {
+						state: "hello",
+						model: "jev-preview",
+						questions: {
+							ok: { type: "noul", instructions: "fake?", criteria: { true: "yes please", false: "no" } },
+							pick: { type: "choice", instructions: "which?", criteria: { a: null, b: "bee" } },
+						},
+					},
+				},
+			]);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	it("judge_batch() runs kernel-local with per-item retry, drain cursor, and attach", async () => {
+		const attempts: string[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async request => {
+				const body = (await request.json()) as { state?: string };
+				const state = body.state ?? "";
+				attempts.push(state);
+				// "world" never succeeds; "hello" succeeds on its second attempt.
+				if (state === "world") return new Response("boom", { status: 500 });
+				if (attempts.filter(attempt => attempt === "hello").length < 2) {
+					return new Response("flaky", { status: 500 });
+				}
+				return Response.json({
+					model: "jev-preview",
+					answers: { q: { type: "noul", noul: 1 } },
+					usage: { input_tokens: 1, output_tokens: 1 },
+				});
+			},
+		});
+
+		try {
+			const result = await runPrelude(
+				[
+					"async def main():",
+					'    b = judge_batch({"x": "hello", "y": "world"}, {"q": {"type": "bool", "instructions": "non-empty?"}}, retries=2)',
+					"    items = []",
+					"    while True:",
+					"        got = await b.drain(timeout=10)",
+					"        if not got:",
+					"            break",
+					"        items += got",
+					"    status = b.status()",
+					"    print(json.dumps({",
+					'        "ok_keys": sorted(k for k, item in items if item.ok),',
+					'        "failed_keys": sorted(b.failed().keys()),',
+					'        "results": b.results(),',
+					'        "done": status["done"],',
+					'        "failed": status["failed"],',
+					'        "total": status["total"],',
+					'        "model": status.get("model"),',
+					'        "attach_same": judge_batch.attach(b.id).id == b.id,',
+					"    }, sort_keys=True))",
+					"asyncio.run(main())",
+				].join("\n"),
+				DIRECT_ENV(server.url.toString()),
+			);
+
+			expect(result.stderr).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(attempts.filter(attempt => attempt === "hello").length).toBe(2);
+			expect(attempts.filter(attempt => attempt === "world").length).toBe(9);
+			const value = JSON.parse(result.stdout.trim());
+			expect(value).toEqual({
+				ok_keys: ["x"],
+				failed_keys: ["y"],
+				results: { x: { q: { type: "bool", bool: 1 } } },
+				done: 2,
+				failed: 1,
+				total: 2,
+				model: "typesafe/jev-preview",
+				attach_same: true,
+			});
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	it("judge_batch() raises from drain() when min_ok cannot be met", async () => {
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response("down", { status: 503 }),
+		});
+
+		try {
+			const result = await runPrelude(
+				[
+					"async def main():",
+					'    b = judge_batch({"x": "hello"}, {"q": {"type": "bool", "instructions": "non-empty?"}}, retries=0, min_ok=1)',
+					"    drained = []",
+					"    try:",
+					"        while True:",
+					"            drained += await b.drain(timeout=10)",
+					'        print("NO ERROR (BAD)")',
+					"    except RuntimeError as exc:",
+					'        print("RAISED:", len(drained) == 1 and "only 0/1 item(s) judged" in str(exc) and "min_ok=1" in str(exc))',
+					"    b.close()",
+					"    try:",
+					"        judge_batch.attach(b.id)",
+					'        print("ATTACH (BAD)")',
+					"    except RuntimeError as exc:",
+					'        print("ATTACH_GONE:", "eval tool bridge unreachable at" in str(exc))',
+					"asyncio.run(main())",
+				].join("\n"),
+				{
+					...DIRECT_ENV(server.url.toString()),
+					// Closed local run attaches via bridge; dead URL hits the typed error.
+					PI_TOOL_BRIDGE_URL: "http://127.0.0.1:1",
+					PI_TOOL_BRIDGE_TOKEN: "test-token",
+					PI_TOOL_BRIDGE_SESSION: "test-session",
+				},
+			);
+
+			expect(result.stderr).toBe("");
+			expect(result.exitCode).toBe(0);
+			const lines = result.stdout.trim().split("\n");
+			expect(lines[0]).toBe("RAISED: True");
+			expect(lines[1]).toBe("ATTACH_GONE: True");
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	it("rejects judge() arguments client-side without touching the network", async () => {
+		let requests = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async request => {
+				requests++;
+				await request.json();
+				return Response.json({ model: "jev-1.13", answers: {}, usage: {} });
+			},
+		});
+
+		try {
+			const result = await runPrelude(
+				[
+					"async def main():",
+					"    errors = []",
+					'    for questions in ({"q": {"type": "choice", "instructions": "x", "criteria": {"only": None}}},',
+					'                      {"q": {"type": "score", "instructions": "x", "criteria": ["only-one"]}},',
+					'                      {"q": {"type": "nope", "instructions": "x"}}):',
+					"        try:",
+					'            await judge("hello", questions)',
+					'            errors.append("no-error")',
+					"        except TypeError as exc:",
+					'            errors.append(str(exc).split(": ")[1])',
+					"    print(json.dumps(errors))",
+					"asyncio.run(main())",
+				].join("\n"),
+				DIRECT_ENV(server.url.toString()),
+			);
+
+			expect(result.stderr).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout.trim())).toEqual([
+				'choice question "q" needs at least two options',
+				'score question "q" needs at least two levels',
+				'question "q" type must be "choice", "bool", or "score"',
+			]);
+			expect(requests).toBe(0);
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	it("surfaces a typed error when the bridge endpoint is unreachable", async () => {
 		const result = await runPrelude(
 			[
