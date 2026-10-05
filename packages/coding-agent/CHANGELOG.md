@@ -31,6 +31,10 @@
 - Fixed cold-resumed subagents losing signed thinking because their system prompt blocks were joined ([#14338](https://github.com/can1357/oh-my-pi/pull/14338) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the first kept assistant turn losing its thinking after Anthropic native compaction, including after a date or working-directory change and on later compactions ([#14251](https://github.com/can1357/oh-my-pi/pull/14251) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed browser `tab.waitForDownload()` and `tab.downloads()` reporting a path that does not exist when another open tab set a different `downloads` directory ([#14434](https://github.com/can1357/oh-my-pi/pull/14434) by [@will-bogusz](https://github.com/will-bogusz))
+### Changed
+
+- Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
+- The `Python tool bridge listening` line is now durable (info-level) and the stop is logged too, so an unreachable bridge is diagnosable from the session log.
 
 ## [18.6.2] - 2026-10-04
 

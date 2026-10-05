@@ -412,6 +412,15 @@ if "__omp_prelude_loaded__" not in globals():
         finally:
             _OMP_CALL_IDENTITY.reset(token)
 
+    class ToolBridgeUnavailable(RuntimeError):
+        def __init__(self, base, session, cause):
+            super().__init__(
+                f"eval tool bridge unreachable at {base} "
+                f"(session {session!r}; host-mediated helpers need a reachable kernel→host transport): {cause}"
+            )
+            self.base = base
+            self.session = session
+
     def _bridge_call(name: str, args: dict):
         """POST one request to the host tool bridge and return its `value`."""
         base, token, session = _tool_proxy_from_env()
@@ -445,6 +454,8 @@ if "__omp_prelude_loaded__" not in globals():
                 body = resp.read()
         except urllib.error.HTTPError as exc:
             body = exc.read()
+        except OSError as exc:
+            raise ToolBridgeUnavailable(base, session, exc) from exc
         try:
             data = json.loads(body)
         except json.JSONDecodeError:
