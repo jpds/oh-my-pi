@@ -151,7 +151,7 @@ When a venv is selected, its bin/Scripts path is prepended to `PATH`. The manage
 
 The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` so streamed output reaches the host promptly.
 
-Session/bridge context is patched before each cell through `PI_SESSION_FILE`, `PI_ARTIFACTS_DIR`, `PI_TOOL_BRIDGE_URL`, `PI_TOOL_BRIDGE_TOKEN`, `PI_TOOL_BRIDGE_SESSION`, and `PI_EVAL_LOCAL_ROOTS`. Missing managed entries are removed from `os.environ`; unrelated environment mutations remain.
+Session/bridge context is patched before each cell through `PI_SESSION_FILE`, `PI_ARTIFACTS_DIR`, `PI_TOOL_BRIDGE_URL`, `PI_TOOL_BRIDGE_TOKEN`, `PI_TOOL_BRIDGE_SESSION`, `PI_JUDGE_DIRECT`, and `PI_EVAL_LOCAL_ROOTS`. Missing managed entries are removed from `os.environ`; unrelated environment mutations remain. `PI_JUDGE_DIRECT` (JSON) carries the resolved native judge transport so `judge`/`judge_batch` call the provider directly instead of through the tool bridge; see `docs/notebook-tool-runtime.md` §4.
 
 ## Tool availability and mode selection
 
