@@ -4,7 +4,7 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import asyncio, collections.abc, contextvars, inspect, os, json, math, re, time, types, typing
+    import asyncio, collections.abc, contextvars, inspect, os, json, math, re, threading, time, types, typing, uuid
     from urllib.parse import unquote
 
 
@@ -862,6 +862,397 @@ if "__omp_prelude_loaded__" not in globals():
             raise RuntimeError("completion() did not return a handle")
         return CompletionHandle(result["id"], schema)
 
+    # --- direct judgment (PI_JUDGE_DIRECT; no host bridge) -----------------
+    #
+    # Host injects the resolved native judge transport as PI_JUDGE_DIRECT JSON;
+    # `judge`/`judge_batch` then POST the provider directly. Without a
+    # descriptor they fall back to the host bridge, preserving judge-role
+    # chains with non-native candidates.
+
+    _JUDGE_MAX_ATTEMPTS = 3
+    _JUDGE_BACKOFF_BASE_S = 0.5
+    _JUDGE_BACKOFF_MAX_S = 5.0
+    _JUDGE_TIMEOUT_S = 10.0
+    _JUDGE_BATCH_CONCURRENCY = 32
+    _JUDGE_BATCH_DEFAULT_RETRIES = 1
+    _JUDGE_BATCH_DRAIN_COALESCE_S = 0.1
+
+    _JUDGE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def _judge_direct_descriptor() -> dict | None:
+        """Resolved native judge transport (PI_JUDGE_DIRECT JSON), or None."""
+        raw = os.environ.get("PI_JUDGE_DIRECT")
+        if not raw:
+            return None
+        try:
+            descriptor = json.loads(raw)
+        except json.JSONDecodeError:
+            raise RuntimeError("PI_JUDGE_DIRECT is not valid JSON") from None
+        if not isinstance(descriptor, dict):
+            raise RuntimeError("PI_JUDGE_DIRECT must be a JSON object")
+        return descriptor
+
+    def _judge_invalid(detail: str) -> TypeError:
+        return TypeError(f"judge() received invalid arguments: {detail}")
+
+    def _judge_check_state(state) -> None:
+        if isinstance(state, str):
+            if not state:
+                raise _judge_invalid("state must not be empty")
+            return
+        if isinstance(state, (dict, list)):
+            try:
+                json.dumps(state)
+            except (TypeError, ValueError):
+                raise _judge_invalid("state must be JSON-serializable") from None
+            return
+        raise _judge_invalid("state must be a string, a JSON object, or a JSON array")
+
+    def _judge_wire_question(id, value) -> dict:
+        """Cell question → System One wire question (`bool` maps to `noul`)."""
+        if not isinstance(value, dict):
+            raise _judge_invalid(f'question "{id}" must be an object')
+        instructions = value.get("instructions")
+        if not isinstance(instructions, str) or not instructions:
+            raise _judge_invalid(f'question "{id}" needs non-empty string instructions')
+        qtype = value.get("type")
+        if qtype == "bool":
+            criteria = value.get("criteria")
+            if criteria is None:
+                return {"type": "noul", "instructions": instructions}
+            if not isinstance(criteria, dict):
+                raise _judge_invalid(f'bool question "{id}" criteria must be {{ true?: str, false?: str }}')
+            wire_criteria = {}
+            for side in ("true", "false"):
+                if side not in criteria:
+                    continue
+                description = criteria[side]
+                if not isinstance(description, str):
+                    raise _judge_invalid(f'bool question "{id}" criteria.{side} must be a string')
+                wire_criteria[side] = description
+            return {"type": "noul", "instructions": instructions, "criteria": wire_criteria}
+        if qtype == "choice":
+            criteria = value.get("criteria")
+            if not isinstance(criteria, dict):
+                raise _judge_invalid(f'choice question "{id}" needs criteria: {{ label: rubric | None }}')
+            wire_criteria = {}
+            for label, rubric in criteria.items():
+                if rubric is not None and not isinstance(rubric, str):
+                    raise _judge_invalid(f'choice question "{id}" criteria "{label}" must be a string or None')
+                wire_criteria[label] = rubric
+            if len(wire_criteria) < 2:
+                # Provider 422s these shapes opaquely ("Endpoint is unavailable.");
+                # validate the same contract client-side.
+                raise _judge_invalid(f'choice question "{id}" needs at least two options')
+            return {"type": "choice", "instructions": instructions, "criteria": wire_criteria}
+        if qtype == "score":
+            levels = value.get("criteria")
+            if not isinstance(levels, list) or not all(isinstance(level, str) for level in levels):
+                raise _judge_invalid(f'score question "{id}" needs criteria: [lowest, ..., highest] level descriptions')
+            if len(levels) < 2:
+                raise _judge_invalid(f'score question "{id}" needs at least two levels')
+            return {"type": "score", "instructions": instructions, "criteria": levels}
+        raise _judge_invalid(f'question "{id}" type must be "choice", "bool", or "score"')
+
+    def _judge_wire_questions(questions) -> dict:
+        if not isinstance(questions, dict):
+            raise _judge_invalid("questions must be an object keyed by id")
+        wire = {id: _judge_wire_question(id, value) for id, value in questions.items()}
+        if not wire:
+            raise _judge_invalid("questions must contain at least one question")
+        return wire
+
+    def _judge_retry_after_s(headers) -> float | None:
+        value = headers.get("Retry-After") if headers is not None else None
+        if value is None:
+            return None
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            return None
+
+    def _judge_backoff_s(attempt: int, retry_after_s: float | None) -> float:
+        if retry_after_s is not None:
+            return min(retry_after_s, _JUDGE_BACKOFF_MAX_S)
+        return min(_JUDGE_BACKOFF_BASE_S * (2**attempt), _JUDGE_BACKOFF_MAX_S)
+
+    def _systemone_post(descriptor: dict, body: dict) -> dict:
+        """POST one System One request; retries transient failures (408/429/5xx, network)."""
+        url = descriptor["baseUrl"].rstrip("/") + descriptor["route"]
+        label = f"{descriptor.get('provider', 'typesafe')}/{descriptor.get('model')}"
+        headers = {
+            "Authorization": f"Bearer {descriptor['apiKey']}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        headers.update(descriptor.get("headers") or {})
+        data = json.dumps(body).encode("utf-8")
+        for attempt in range(_JUDGE_MAX_ATTEMPTS):
+            req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+            try:
+                with _JUDGE_OPENER.open(req, timeout=_JUDGE_TIMEOUT_S) as resp:
+                    return json.loads(resp.read())
+            except urllib.error.HTTPError as exc:
+                detail = exc.read()
+                status = exc.code
+                transient = status == 408 or status == 429 or status >= 500
+                error = RuntimeError(f"{label} API error ({status}): {detail[:300]!r}")
+                if not transient or attempt + 1 >= _JUDGE_MAX_ATTEMPTS:
+                    raise error from None
+                time.sleep(_judge_backoff_s(attempt, _judge_retry_after_s(exc.headers)))
+            except (urllib.error.URLError, TimeoutError) as exc:
+                if attempt + 1 >= _JUDGE_MAX_ATTEMPTS:
+                    raise RuntimeError(
+                        f"judge transport {url} failed after {_JUDGE_MAX_ATTEMPTS} attempts: {exc}"
+                    ) from exc
+                time.sleep(_judge_backoff_s(attempt, None))
+        raise RuntimeError("unreachable")
+
+    def _judge_shape_answers(descriptor: dict, wire_questions: dict, response) -> tuple[dict, str]:
+        if not isinstance(response, dict) or not isinstance(response.get("answers"), dict):
+            raise RuntimeError("judge transport returned an invalid response (missing answers)")
+        answers = {}
+        for id, question in wire_questions.items():
+            answer = response["answers"].get(id)
+            if not isinstance(answer, dict) or answer.get("type") != question["type"]:
+                raise RuntimeError(
+                    f"judge response is missing a \"{question['type']}\" answer for question \"{id}\""
+                )
+            answers[id] = {"type": "bool", "bool": answer.get("noul")} if answer["type"] == "noul" else answer
+        model = response.get("model") or descriptor.get("model")
+        return answers, f"{descriptor.get('provider', 'typesafe')}/{model}"
+
+    def _judge_once(descriptor: dict, state, wire_questions: dict) -> tuple[dict, str]:
+        response = _systemone_post(
+            descriptor,
+            {"state": state, "model": descriptor.get("model"), "questions": wire_questions},
+        )
+        return _judge_shape_answers(descriptor, wire_questions, response)
+
+    def _judge_count(value, name, fallback, maximum=None):
+        if value is None:
+            return fallback
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise TypeError(f"judge_batch() received invalid arguments: {name} must be a non-negative integer")
+        if maximum is not None:
+            return min(value, maximum)
+        return value
+
+    class _BridgeBatch:
+        """Operates a host-owned judgment run through the tool bridge."""
+
+        __slots__ = ("id",)
+
+        def __init__(self, id):
+            self.id = id
+
+        def _call(self, op, **args):
+            return _bridge_call("__judge_batch__", {"op": op, "id": self.id, **args})
+
+        def status(self):
+            return self._call("status")
+
+        def drain_items(self, timeout_s):
+            args = {}
+            if timeout_s is not None:
+                args["timeoutMs"] = max(0, float(timeout_s) * 1000)
+            result = self._call("drain", **args)
+            return result.get("items", []) if isinstance(result, dict) else []
+
+        def results(self):
+            result = self._call("results")
+            return result.get("results", {}) if isinstance(result, dict) else {}
+
+        def failed(self):
+            result = self._call("failed")
+            return result.get("failed", {}) if isinstance(result, dict) else {}
+
+        def cancel(self):
+            result = self._call("cancel")
+            return bool(result.get("cancelled")) if isinstance(result, dict) else False
+
+        def close(self):
+            self._call("close")
+
+    _JUDGE_BATCHES: dict = {}
+
+    class _LocalBatchRun:
+        """Kernel-owned bulk judgment run (mirrors the host-side `JudgmentBatch`).
+
+        Item failures are recorded per key, never raised; `drain` raises only on
+        wholesale death (`min_ok` unmet, cancelled).
+        """
+
+        __slots__ = (
+            "id", "total", "_descriptor", "_items", "_questions", "_concurrency", "_retries",
+            "_min_ok", "_intent", "_lock", "_wake", "_settled", "_cursor", "_failed", "_running",
+            "_cancelled", "_error", "_next", "_model", "_started",
+        )
+
+        def __init__(self, id, descriptor, items, questions, concurrency, retries, min_ok, intent):
+            self.id = id
+            self.total = len(items)
+            self._descriptor = descriptor
+            self._items = items
+            self._questions = questions
+            self._concurrency = concurrency
+            self._retries = retries
+            self._min_ok = min_ok
+            self._intent = intent
+            self._lock = threading.Lock()
+            self._wake = threading.Condition(self._lock)
+            self._settled = []
+            self._cursor = 0
+            self._failed = 0
+            self._running = True
+            self._cancelled = False
+            self._error = None
+            self._next = 0
+            self._model = None
+            self._started = time.monotonic()
+
+        def start(self):
+            for _ in range(max(1, min(self._concurrency, self.total))):
+                threading.Thread(target=self._worker, daemon=True).start()
+
+        def _worker(self):
+            while True:
+                with self._lock:
+                    if self._next >= self.total:
+                        return
+                    index = self._next
+                    self._next += 1
+                if self._cancelled:
+                    self._settle({"key": self._items[index]["key"], "error": "cancelled"})
+                else:
+                    self._settle(self._judge_item(self._items[index]))
+
+        def _judge_item(self, item):
+            last = None
+            for _ in range(self._retries + 1):
+                if self._cancelled:
+                    return {"key": item["key"], "error": "cancelled"}
+                try:
+                    answers, model = _judge_once(self._descriptor, item["state"], self._questions)
+                    return {"key": item["key"], "answers": answers, "model": model}
+                except Exception as exc:
+                    last = exc
+            return {"key": item["key"], "error": str(last)}
+
+        def _settle(self, result):
+            with self._wake:
+                self._settled.append(result)
+                if result.get("error") is not None:
+                    self._failed += 1
+                if result.get("model"):
+                    self._model = result["model"]
+                if len(self._settled) >= self.total:
+                    self._running = False
+                    if self._cancelled:
+                        self._error = "judge_batch cancelled"
+                    elif self.total - self._failed < self._min_ok:
+                        self._error = (
+                            f"judge_batch: only {self.total - self._failed}/{self.total} item(s) judged "
+                            f"(min_ok={self._min_ok}); last error: {self._last_error() or 'unknown'}"
+                        )
+                self._wake.notify_all()
+
+        def _last_error(self):
+            for entry in reversed(self._settled):
+                error = entry.get("error")
+                if error is not None and error != "cancelled":
+                    return error
+            return None
+
+        def status(self):
+            with self._lock:
+                snapshot = {
+                    "id": self.id,
+                    "intent": self._intent,
+                    "total": self.total,
+                    "done": len(self._settled),
+                    "failed": self._failed,
+                    # Not priced: kernel has no catalog costs; usage lands on the provider account.
+                    "cost": 0.0,
+                    "running": self._running,
+                    "elapsedS": round((time.monotonic() - self._started) * 10) / 10,
+                }
+                if self._model is not None:
+                    snapshot["model"] = self._model
+                if self._error is not None:
+                    snapshot["error"] = self._error
+                return snapshot
+
+        def drain_items(self, timeout_s):
+            with self._wake:
+                if self._cursor >= len(self._settled) and self._running:
+                    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+                    while self._cursor >= len(self._settled) and self._running:
+                        if deadline is None:
+                            self._wake.wait()
+                        else:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                break
+                            self._wake.wait(remaining)
+                    if self._cursor < len(self._settled) and self._running:
+                        # Hold briefly (never past the deadline) so near-simultaneous
+                        # settles return together.
+                        linger = (
+                            _JUDGE_BATCH_DRAIN_COALESCE_S
+                            if deadline is None
+                            else min(_JUDGE_BATCH_DRAIN_COALESCE_S, deadline - time.monotonic())
+                        )
+                        if linger > 0:
+                            self._wake.wait(linger)
+                if self._cursor < len(self._settled):
+                    items = self._settled[self._cursor :]
+                    self._cursor = len(self._settled)
+                    return items
+                if not self._running and self._error is not None:
+                    raise RuntimeError(self._error)
+                return []
+
+        def results(self):
+            with self._lock:
+                return {str(e["key"]): e["answers"] for e in self._settled if e.get("answers") is not None}
+
+        def failed(self):
+            with self._lock:
+                return {str(e["key"]): e["error"] for e in self._settled if e.get("error") is not None}
+
+        def cancel(self):
+            with self._lock:
+                if not self._running or self._cancelled:
+                    return False
+                self._cancelled = True
+                self._wake.notify_all()
+                return True
+
+        def close(self):
+            self.cancel()
+            _JUDGE_BATCHES.pop(self.id, None)
+
+    def _start_local_batch(descriptor, items, questions, concurrency, retries, min_ok, intent):
+        run = _LocalBatchRun(
+            id=f"jdgb-{uuid.uuid4().hex}",
+            descriptor=descriptor,
+            items=items,
+            questions=questions,
+            concurrency=(
+                _JUDGE_BATCH_CONCURRENCY
+                if concurrency is None
+                else _judge_count(concurrency, "concurrency", _JUDGE_BATCH_CONCURRENCY, _JUDGE_BATCH_CONCURRENCY)
+                or _JUDGE_BATCH_CONCURRENCY
+            ),
+            retries=_judge_count(retries, "retries", _JUDGE_BATCH_DEFAULT_RETRIES),
+            min_ok=_judge_count(min_ok, "minOk", 1, len(items)),
+            intent=intent or "Judging",
+        )
+        _JUDGE_BATCHES[run.id] = run
+        run.start()
+        return run
+
     def _check_questions(questions):
         if not isinstance(questions, dict):
             raise TypeError("judge(state, questions) expects questions as a dict keyed by id")
@@ -869,6 +1260,12 @@ if "__omp_prelude_loaded__" not in globals():
     async def judge(state, questions):
         """Answer typed questions over one ``state``; returns ``{id: answer}`` (choice/bool/score)."""
         _check_questions(questions)
+        descriptor = _judge_direct_descriptor()
+        if descriptor is not None:
+            wire_questions = _judge_wire_questions(questions)
+            _judge_check_state(state)
+            answers, _model = await asyncio.to_thread(_judge_once, descriptor, state, wire_questions)
+            return answers
         result = await asyncio.to_thread(
             _bridge_call, "__judge__", {"state": state, "questions": questions}
         )
@@ -897,29 +1294,24 @@ if "__omp_prelude_loaded__" not in globals():
             return f"<judgment {self.key!r} {self.answers!r}>"
 
     class JudgmentBatch:
-        """Host-owned bulk judgment run. Pull settled items with ``await drain()`` across as many cells as needed."""
+        """Bulk judgment run. Pull settled items with ``await drain()`` across as many cells as needed."""
 
-        __slots__ = ("id", "total", "intent")
+        __slots__ = ("id", "total", "intent", "_backend")
 
-        def __init__(self, id, total, intent):
-            self.id = id
+        def __init__(self, backend, total, intent):
+            self.id = backend.id
             self.total = total
             self.intent = intent
-
-        def _call(self, op, **args):
-            return _bridge_call("__judge_batch__", {"op": op, "id": self.id, **args})
+            self._backend = backend
 
         def status(self):
             """Snapshot: ``intent``, ``done``, ``total``, ``failed``, ``running``, ``model``, ``elapsedS``."""
-            return self._call("status")
+            return self._backend.status()
 
         async def drain(self, timeout=None):
             """Items settled since the last drain as ``[(key, JudgmentItem)]``; waits up to ``timeout`` seconds for at least one, else ``[]``."""
-            args = {}
-            if timeout is not None:
-                args["timeoutMs"] = max(0, float(timeout) * 1000)
-            result = await asyncio.to_thread(self._call, "drain", **args)
-            items = result.get("items", []) if isinstance(result, dict) else []
+            timeout_s = None if timeout is None else max(0.0, float(timeout))
+            items = await asyncio.to_thread(self._backend.drain_items, timeout_s)
             return [(item.get("key"), JudgmentItem(item)) for item in items]
 
         async def drain_iter(self, timeout=None):
@@ -935,21 +1327,18 @@ if "__omp_prelude_loaded__" not in globals():
 
         def results(self):
             """``{key: answers}`` for every item judged so far."""
-            result = self._call("results")
-            return result.get("results", {}) if isinstance(result, dict) else {}
+            return self._backend.results()
 
         def failed(self):
             """``{key: error}`` for every item that failed so far."""
-            result = self._call("failed")
-            return result.get("failed", {}) if isinstance(result, dict) else {}
+            return self._backend.failed()
 
         def cancel(self):
-            result = self._call("cancel")
-            return bool(result.get("cancelled")) if isinstance(result, dict) else False
+            return self._backend.cancel()
 
         def close(self):
-            """Cancel if running and release the host-side run."""
-            self._call("close")
+            """Cancel if running and release the run."""
+            self._backend.close()
             return None
 
         def __repr__(self):
@@ -959,7 +1348,7 @@ if "__omp_prelude_loaded__" not in globals():
         if not isinstance(result, dict) or not isinstance(result.get("id"), str):
             raise RuntimeError("judge_batch() did not return a batch")
         return JudgmentBatch(
-            result["id"],
+            _BridgeBatch(result["id"]),
             int(result.get("total") or 0),
             result.get("intent") or "Judging",
         )
@@ -973,7 +1362,7 @@ if "__omp_prelude_loaded__" not in globals():
         min_ok=None,
         intent=None,
     ):
-        """Judge every state with the same ``questions`` on the host; returns a ``JudgmentBatch`` to drain across cells.
+        """Judge every state with the same ``questions``; returns a ``JudgmentBatch`` to drain across cells.
 
         ``states`` is ``{key: state}`` or a list (keys are indices). ``intent`` is an
         optional nonempty progress/job label. Item failures land in ``JudgmentItem.error``;
@@ -990,6 +1379,13 @@ if "__omp_prelude_loaded__" not in globals():
             items = [{"key": index, "state": state} for index, state in enumerate(states)]
         else:
             raise TypeError("judge_batch(states, questions) expects states as a dict or list")
+        if not items:
+            raise TypeError("judge_batch() received invalid arguments: items must not be empty")
+        descriptor = _judge_direct_descriptor()
+        if descriptor is not None:
+            wire_questions = _judge_wire_questions(questions)
+            run = _start_local_batch(descriptor, items, wire_questions, concurrency, retries, min_ok, intent)
+            return JudgmentBatch(run, run.total, run._intent)
         args = {"op": "create", "items": items, "questions": questions}
         if concurrency is not None:
             args["concurrency"] = int(concurrency)
@@ -1002,7 +1398,10 @@ if "__omp_prelude_loaded__" not in globals():
         return _judge_batch_from(_bridge_call("__judge_batch__", args))
 
     def _attach_judge_batch(id):
-        """Re-create a ``JudgmentBatch`` ref by id (after a kernel reset or from another runtime)."""
+        """Re-create a ``JudgmentBatch`` ref by id (kernel-local run, or a host-owned run from another runtime)."""
+        run = _JUDGE_BATCHES.get(str(id))
+        if run is not None:
+            return JudgmentBatch(run, run.total, run._intent)
         return _judge_batch_from(_bridge_call("__judge_batch__", {"op": "attach", "id": str(id)}))
 
     judge_batch.attach = _attach_judge_batch

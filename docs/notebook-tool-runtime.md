@@ -122,9 +122,12 @@ Kernel startup and per-execution environment patching can receive:
 - `PI_TOOL_BRIDGE_URL`
 - `PI_TOOL_BRIDGE_TOKEN`
 - `PI_TOOL_BRIDGE_SESSION`
+- `PI_JUDGE_DIRECT`
 - `PI_EVAL_LOCAL_ROOTS`
 
 The runner applies the requested cwd and managed environment patch before each cell, with cwd placed first on `sys.path`. A `%cd` or `os.chdir()` inside a cell does not override the host session cwd for the next eval call. Managed entries omitted from the patch are removed from `os.environ`.
+
+`PI_JUDGE_DIRECT` (JSON) carries the resolved native judge transport (`baseUrl`, `route`, `provider`, `model`, `apiKey`, `headers`) when the session's judge role starts with a native System One judge; the Python `judge`/`judge_batch` helpers then POST the provider directly, and `judge_batch` runs kernel-locally instead of being host-owned. Without it they fall back to the tool bridge. Setting `PI_NO_TOOL_BRIDGE=1` on the host skips the loopback bridge entirely (no bind, no `PI_TOOL_BRIDGE_*` env); host-mediated helpers then fail fast with a typed error naming the flag.
 
 ## 5) Streaming/chunk and display handling (kernel-backed path)
 
