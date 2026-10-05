@@ -127,9 +127,12 @@ function systemOneWire(path: string): JudgmentWire {
 	};
 }
 
+/** Path TypeSafe's System One wire posts to, shared by every System One server. */
+export const TYPESAFE_JUDGMENT_ROUTE = "/v1/systemone";
+
 /** TypeSafe's own route, shared by every System One server. */
 export const typesafeWire: JudgmentWire = {
-	...systemOneWire("/v1/systemone"),
+	...systemOneWire(TYPESAFE_JUDGMENT_ROUTE),
 	images: { mimeTypes: ["image/png", "image/jpeg"] },
 	supportsImageAssets: true,
 	imagesRequireOptIn: true,
