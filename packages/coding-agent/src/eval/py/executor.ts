@@ -405,9 +405,7 @@ async function ensureKernelAvailable(cwd: string, options: PythonExecutorOptions
 
 /**
  * `PI_NO_TOOL_BRIDGE=1` skips the HTTP bridge entirely; host-mediated helpers
- * then run over the runner's stdio host-request channel, and when no channel
- * exists they fail fast with the typed missing-env error. `judge`/`judge_batch`
- * keep working through `PI_JUDGE_DIRECT`.
+ * then run over the runner's stdio host-request channel instead.
  */
 function toolBridgeDisabled(): boolean {
 	const raw = Bun.env.PI_NO_TOOL_BRIDGE?.trim().toLowerCase();
@@ -425,6 +423,11 @@ async function ensureToolBridge(options: PythonExecutorOptions): Promise<void> {
 	}
 }
 
+/**
+ * Resolve the judge role's primary native candidate once per execution. Left
+ * unset when the session has no model registry or the chain does not lead with
+ * a native judge (those keep host-side fallbacks over the bridge).
+ */
 async function executePerCall(code: string, cwd: string, options: PythonExecutorOptions): Promise<PythonResult> {
 	if (options.bridge && !options.bridgeSessionId) {
 		options.bridgeSessionId = `py-bridge:${crypto.randomUUID()}`;
