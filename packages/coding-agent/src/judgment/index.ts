@@ -33,7 +33,9 @@ import {
 	nativeJudgmentSupportsImages,
 	type Judge,
 	type JudgeOptions,
+	type JudgmentApi,
 	type JudgmentRequest,
+	TYPESAFE_JUDGMENT_ROUTE,
 	type JudgmentResult,
 	type Model,
 	type NativeJudge,
@@ -52,7 +54,7 @@ import { isEmbeddedImageContent } from "@oh-my-pi/pi-ai/images/shared";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import type { JudgmentImageInput } from "@oh-my-pi/pi-catalog/compat/judgment-images";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, prompt, USER_AGENT, untilAborted } from "@oh-my-pi/pi-utils";
 import { normalizeModelContextImages } from "../utils/image-loading";
 import { type FittedImage, fitImage } from "../utils/image-resize";
 import { cfgNoJudge, cfgOffline } from "../config/auxiliary-model-policy";
@@ -456,6 +458,54 @@ function allowedJudgeCandidates(
 }
 
 /** Resolve a live judge-role chain. Candidates resolve lazily and are reused for {@link CANDIDATE_TTL_MS}. With `deps.leadModel`, that model is tried first. */
+/** One native System One judge transport, serializable into a kernel environment. */
+export interface NativeJudgeDescriptor {
+	api: JudgmentApi;
+	/** Judgment POST path under {@link NativeJudgeDescriptor.baseUrl}. */
+	route: string;
+	provider: string;
+	model: string;
+	baseUrl: string;
+	apiKey: string;
+	headers?: Record<string, string>;
+}
+
+/**
+ * Resolve the judge role's primary candidate as a transport the eval kernel can
+ * POST directly, bypassing the host tool bridge. Only a native judge leading the
+ * role chain yields a descriptor; any other chain shape returns `undefined` so
+ * the bridge preserves candidate order and fallback semantics.
+ */
+export async function resolveNativeJudgeDescriptor(deps: {
+	settings: Settings;
+	registry: ModelRegistry;
+	sessionId?: string;
+	signal?: AbortSignal;
+}): Promise<NativeJudgeDescriptor | undefined> {
+	const { roleChain } = cachedJudgeRoleChain(deps.settings, deps.registry as RegistryWithRejections);
+	const [primary] = roleChain;
+	if (!primary) return undefined;
+	const model = primary.model;
+	// The kernel-side transport speaks the System One wire only; other native
+	// judgment APIs keep the bridge, which encodes their dialects.
+	if (!isJudgmentApi(model.api) || model.api !== "typesafe") return undefined;
+	const apiKey = await deps.registry.getApiKey(model, deps.sessionId, { signal: deps.signal });
+	if (apiKey === undefined) return undefined;
+	const modelHeaders = await deps.registry.resolveModelHeaders(model, deps.signal);
+	// Kernel posts via Python urllib: its default UA draws 403/1010 from
+	// Cloudflare-fronted judgment endpoints. Identify as omp; provider UA wins.
+	const headers = { "User-Agent": USER_AGENT, ...modelHeaders };
+	return {
+		api: model.api,
+		route: TYPESAFE_JUDGMENT_ROUTE,
+		provider: model.provider,
+		model: model.id,
+		baseUrl: model.baseUrl.replace(/\/+$/, ""),
+		apiKey,
+		headers,
+	};
+}
+
 export function resolveJudge(deps: JudgeDeps): ChainJudge {
 	return new ChainJudge(deps);
 }
