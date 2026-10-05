@@ -13,6 +13,7 @@ import type { JsStatusEvent } from "./js/shared/types";
 import type { KernelDisplayOutput } from "./py/display";
 import { registerPyToolBridge } from "./py/tool-bridge";
 import { getActiveEvalShadowCell } from "./speculation/runtime-context";
+import type { NativeJudgeDescriptor } from "../judgment";
 
 /**
  * Constructor for a language executor's cancellation error. Each backend
@@ -316,6 +317,7 @@ export const MANAGED_KERNEL_ENV_KEYS = [
 	"PI_TOOL_BRIDGE_URL",
 	"PI_TOOL_BRIDGE_TOKEN",
 	"PI_TOOL_BRIDGE_SESSION",
+	"PI_JUDGE_DIRECT",
 	"PI_EVAL_LOCAL_ROOTS",
 ] as const;
 
@@ -324,6 +326,8 @@ interface ManagedKernelEnvOptions {
 	artifactsDir?: string;
 	bridgeSessionId?: string;
 	bridge?: { url: string; token: string };
+	/** Resolved native judge transport; lets the kernel judge without the tool bridge. */
+	judgeDirect?: NativeJudgeDescriptor;
 	localRoots?: Record<string, string>;
 }
 interface ManagedKernelEnvPolicy {
@@ -349,6 +353,7 @@ export function buildManagedKernelEnvPatch(
 			patch.PI_TOOL_BRIDGE_TOKEN = options.bridge.token;
 			patch.PI_TOOL_BRIDGE_SESSION = options.bridgeSessionId ?? "";
 		}
+		if (options.judgeDirect) patch.PI_JUDGE_DIRECT = JSON.stringify(options.judgeDirect);
 		if (localRoots) patch.PI_EVAL_LOCAL_ROOTS = JSON.stringify(localRoots);
 		return patch;
 	}
@@ -358,6 +363,7 @@ export function buildManagedKernelEnvPatch(
 		PI_TOOL_BRIDGE_URL: options.bridge?.url ?? null,
 		PI_TOOL_BRIDGE_TOKEN: options.bridge?.token ?? null,
 		PI_TOOL_BRIDGE_SESSION: options.bridge && options.bridgeSessionId ? options.bridgeSessionId : null,
+		PI_JUDGE_DIRECT: options.judgeDirect ? JSON.stringify(options.judgeDirect) : null,
 		PI_EVAL_LOCAL_ROOTS: localRoots && Object.keys(localRoots).length > 0 ? JSON.stringify(localRoots) : null,
 	};
 }
