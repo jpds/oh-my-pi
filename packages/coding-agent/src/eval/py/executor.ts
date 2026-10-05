@@ -384,8 +384,18 @@ async function ensureKernelAvailable(cwd: string, options: PythonExecutorOptions
 	}
 }
 
+/**
+ * `PI_NO_TOOL_BRIDGE=1` skips the bridge entirely; host-mediated helpers then
+ * fail fast with the typed missing-env error. `judge`/`judge_batch` keep
+ * working through `PI_JUDGE_DIRECT`.
+ */
+function toolBridgeDisabled(): boolean {
+	const raw = Bun.env.PI_NO_TOOL_BRIDGE?.trim().toLowerCase();
+	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 async function ensureToolBridge(options: PythonExecutorOptions): Promise<void> {
-	if (!options.toolSession || options.bridge) return;
+	if (!options.toolSession || options.bridge || toolBridgeDisabled()) return;
 	try {
 		options.bridge = await ensurePyToolBridge();
 	} catch (err) {
