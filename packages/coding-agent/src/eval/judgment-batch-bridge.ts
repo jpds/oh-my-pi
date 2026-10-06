@@ -47,12 +47,13 @@ const EVENT_PROGRESS_INTERVAL_MS = 250;
 /** Intent used when the caller does not describe the batch. */
 const DEFAULT_INTENT = "Judging";
 
-/** Caller-supplied item key; list inputs use their index. */
+/** Caller-supplied item key; list inputs use their index. Normalized to a string on the wire. */
 export type BatchKey = string | number;
 
 /** One settled item as the cell receives it from `drain()`. */
 export interface JudgmentBatchItem {
-	key: BatchKey;
+	/** Always a string: `drain()` and `results()`/`failed()` key the same item identically. */
+	key: string;
 	answers?: Record<string, CellAnswer>;
 	error?: string;
 	/** Backend that answered; absent on failure. */
@@ -92,7 +93,8 @@ export type EvalJudgmentBatchResult =
 	| { closed: boolean };
 
 interface BatchInput {
-	key: BatchKey;
+	/** Normalized to a string by {@link parseItems}; list states arrive as numeric indices. */
+	key: string;
 	state: JudgmentState;
 }
 
@@ -113,12 +115,15 @@ function isBatchKey(value: unknown): value is BatchKey {
 function parseItems(value: unknown): BatchInput[] {
 	if (!Array.isArray(value)) throw invalid("items must be an array of { key, state }");
 	if (value.length === 0) throw invalid("items must not be empty");
-	const seen = new Set<BatchKey>();
+	const seen = new Set<string>();
 	return value.map((entry, index) => {
 		if (!isRecord(entry) || !isBatchKey(entry.key)) throw invalid(`item ${index} needs a string or number key`);
-		if (seen.has(entry.key)) throw invalid(`duplicate item key ${JSON.stringify(entry.key)}`);
-		seen.add(entry.key);
-		return { key: entry.key, state: parseState(entry.state) };
+		// Stringify here so a list's numeric index and the object keys `results()`/`failed()`
+		// return are the same key type; `0` and `"0"` collide as duplicates.
+		const key = String(entry.key);
+		if (seen.has(key)) throw invalid(`duplicate item key ${JSON.stringify(entry.key)}`);
+		seen.add(key);
+		return { key, state: parseState(entry.state) };
 	});
 }
 
@@ -166,6 +171,8 @@ export class JudgmentBatch {
 	readonly #waiters: Array<() => void> = [];
 	readonly #startedAt = Date.now();
 	readonly #finished = Promise.withResolvers<void>();
+	/** Set once the run stops; freezes `elapsedS` so a finished batch reports its duration, not time-since-start. */
+	#finishedAt: number | undefined;
 	#cursor = 0;
 	#failed = 0;
 	#cost = 0;
@@ -243,7 +250,7 @@ export class JudgmentBatch {
 			cost: this.#cost,
 			running: this.#running,
 			...(this.#model === undefined ? {} : { model: this.#model }),
-			elapsedS: Math.round((Date.now() - this.#startedAt) / 100) / 10,
+			elapsedS: Math.round(((this.#finishedAt ?? Date.now()) - this.#startedAt) / 100) / 10,
 			...(this.#error === undefined ? {} : { error: this.#error }),
 		};
 	}
@@ -276,13 +283,13 @@ export class JudgmentBatch {
 	/** All settled items (successes and failures) keyed by id, mirroring `drain()`'s item shape. */
 	results(): Record<string, JudgmentBatchItem> {
 		const out: Record<string, JudgmentBatchItem> = {};
-		for (const item of this.#settled) out[String(item.key)] = item;
+		for (const item of this.#settled) out[item.key] = item;
 		return out;
 	}
 
 	failed(): Record<string, string> {
 		const out: Record<string, string> = {};
-		for (const item of this.#settled) if (item.error !== undefined) out[String(item.key)] = item.error;
+		for (const item of this.#settled) if (item.error !== undefined) out[item.key] = item.error;
 		return out;
 	}
 
@@ -339,6 +346,7 @@ export class JudgmentBatch {
 			this.#error = error instanceof Error ? error.message : String(error);
 		} finally {
 			this.#running = false;
+			this.#finishedAt = Date.now();
 			this.#emitProgressEvent(true);
 			this.#finished.resolve();
 			for (const wake of this.#waiters.splice(0)) wake();
@@ -373,9 +381,12 @@ export class JudgmentBatch {
 		};
 		await Promise.all(Array.from({ length: Math.min(this.#options.concurrency, this.total) }, worker));
 		const ok = this.#settled.length - this.#failed;
-		if (signal.aborted) this.#error = "judge_batch cancelled";
-		else if (ok < this.#options.minOk) {
-			this.#error = `judge_batch: only ${ok}/${this.total} item(s) judged (min_ok=${this.#options.minOk}); last error: ${this.#lastError() ?? "unknown"}`;
+		// Cancellation stops further dispatch, but a run whose min_ok was already met is
+		// not "wholesale death": drain() must hand back the settled items, not raise.
+		if (ok < this.#options.minOk) {
+			this.#error = signal.aborted
+				? "judge_batch cancelled"
+				: `judge_batch: only ${ok}/${this.total} item(s) judged (min_ok=${this.#options.minOk}); last error: ${this.#lastError() ?? "unknown"}`;
 		}
 	}
 

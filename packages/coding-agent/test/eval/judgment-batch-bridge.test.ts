@@ -250,13 +250,13 @@ describe("judge_batch bridge", () => {
 
 		// Near-simultaneous settles coalesce into one drain instead of one round-trip each.
 		const first = await drain(session, created.id, 5_000);
-		expect(first.map(item => item.key).sort()).toEqual([0, 1]);
-		expect(first.find(item => item.key === 0)).toEqual({
-			key: 0,
+		expect(first.map(item => item.key).sort()).toEqual(["0", "1"]);
+		expect(first.find(item => item.key === "0")).toEqual({
+			key: "0",
 			answers: { tests: { type: "bool", bool: 1 } },
 			model: "p/smol",
 		});
-		expect(first.find(item => item.key === 1)?.error).toContain('judgment "tests"');
+		expect(first.find(item => item.key === "1")?.error).toContain('judgment "tests"');
 		// Nothing new and the run is still going: a zero timeout returns immediately with nothing.
 		expect(await drain(session, created.id, 0)).toEqual([]);
 
@@ -264,7 +264,7 @@ describe("judge_batch bridge", () => {
 		gate.resolve("tests: no");
 		expect(await pending).toEqual([
 			{
-				key: 2,
+				key: "2",
 				answers: { tests: { type: "bool", bool: 0 } },
 				model: "p/smol",
 			},
@@ -282,9 +282,9 @@ describe("judge_batch bridge", () => {
 		// results() mirrors drain()'s item shape for every settled item, failures included.
 		expect(await runEvalJudgmentBatch({ op: "results", id: created.id }, { session })).toEqual({
 			results: {
-				"0": { key: 0, answers: { tests: { type: "bool", bool: 1 } }, model: "p/smol" },
-				"1": { key: 1, error: expect.stringContaining('judgment "tests"') },
-				"2": { key: 2, answers: { tests: { type: "bool", bool: 0 } }, model: "p/smol" },
+				"0": { key: "0", answers: { tests: { type: "bool", bool: 1 } }, model: "p/smol" },
+				"1": { key: "1", error: expect.stringContaining('judgment "tests"') },
+				"2": { key: "2", answers: { tests: { type: "bool", bool: 0 } }, model: "p/smol" },
 			},
 		});
 		const failed = (await runEvalJudgmentBatch({ op: "failed", id: created.id }, { session })) as {
@@ -344,6 +344,46 @@ describe("judge_batch bridge", () => {
 		expect(manager?.getJob(created.id)?.status).toBe("cancelled");
 	});
 
+	it("returns settled items instead of raising when a cancelled run still met min_ok", async () => {
+		const gate = Promise.withResolvers<string>();
+		mockJudge({ "state-a": "tests: yes", "state-b": gate.promise, "state-c": gate.promise });
+		const { session } = makeSession();
+		const created = await create(session, ["state-a", "state-b", "state-c"], { concurrency: 1, minOk: 1 });
+		// One item settles before cancellation, satisfying min_ok.
+		const first: JudgmentBatchItem[] = [];
+		while (first.length === 0) first.push(...(await drain(session, created.id, 5_000)));
+		expect(first[0]?.key).toBe("0");
+		expect(first[0]?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+		expect(await runEvalJudgmentBatch({ op: "cancel", id: created.id }, { session })).toEqual({ cancelled: true });
+		gate.resolve("tests: yes");
+
+		const rest: JudgmentBatchItem[] = [];
+		for (;;) {
+			const batch = await drain(session, created.id, 5_000);
+			if (batch.length === 0) break;
+			rest.push(...batch);
+		}
+		expect(rest.map(item => item.key)).toEqual(["1", "2"]);
+		const final = await status(session, created.id);
+		expect(final.error).toBeUndefined();
+		expect(final.running).toBe(false);
+	});
+
+	it("freezes elapsedS once the run settles", async () => {
+		mockJudge({ "state-a": "tests: yes" });
+		const { session, manager } = makeSession();
+		const created = await create(session, ["state-a"]);
+		await manager?.getJob(created.id)?.promise;
+		const settled = await status(session, created.id);
+		expect(settled.running).toBe(false);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+		try {
+			expect((await status(session, created.id)).elapsedS).toBe(settled.elapsedS);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
 	it("scopes attach and release to the owning agent", async () => {
 		mockJudge({ "state-a": "tests: yes" });
 		const { session } = makeSession();
@@ -370,7 +410,7 @@ describe("judge_batch bridge", () => {
 		const created = await create(session, ["state-a"]);
 		expect(await drain(session, created.id, 5_000)).toEqual([
 			{
-				key: 0,
+				key: "0",
 				answers: { tests: { type: "bool", bool: 1 } },
 				model: "p/smol",
 			},

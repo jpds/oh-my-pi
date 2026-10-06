@@ -427,9 +427,11 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	};
 
 	// Judge every state with the same questions on the host. `states` is
-	// `{ key: state }` or an array (keys are indices). `intent` is an optional
+	// `{ key: state }` or an array (indices are stringified by the host, so
+	// drain/results/failed agree on string keys). `intent` is an optional
 	// nonempty progress/job label. Item failures land in `JudgmentItem.error`;
-	// only a run that dies wholesale rejects `drain()`.
+	// only a run that dies wholesale (fewer than `minOk` judged) rejects
+	// `drain()`, and `cancel()` stops further dispatch.
 	const judgeBatch = async (states, questions, opts, ...rest) => {
 		questions = checkQuestions(questions);
 		const options = optionsArg(
