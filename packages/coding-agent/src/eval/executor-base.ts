@@ -333,7 +333,7 @@ interface ManagedKernelEnvPolicy {
 	 * and must stay out of the kernel subprocess environment. The runner
 	 * receives it per request (env patch) and stashes it runner-side.
 	 */
-	omitJudgeDirect?: boolean;
+	omitDirectTransports?: boolean;
 }
 
 export function buildManagedKernelEnvPatch(options: ManagedKernelEnvOptions): Record<string, string | null>;
@@ -358,6 +358,8 @@ export function buildManagedKernelEnvPatch(
 		if (localRoots) patch.PI_EVAL_LOCAL_ROOTS = JSON.stringify(localRoots);
 		return patch;
 	}
+	const judgeDirect =
+		options.judgeDirect && !policy?.omitDirectTransports ? JSON.stringify(options.judgeDirect) : null;
 	return {
 		PI_SESSION_FILE: options.sessionFile ?? null,
 		PI_ARTIFACTS_DIR: options.artifactsDir ?? null,
