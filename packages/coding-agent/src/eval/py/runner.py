@@ -197,6 +197,10 @@ class _RunnerState:
         # processes inheriting stdout). With overlapping requests the most
         # recently started one wins — strictly better than dropping the bytes.
         self.capture_rid: str | None = None
+        # Resolved judge transport (PI_JUDGE_DIRECT), held out of
+        # `os.environ`: the key must not be readable by cell code's plain
+        # environment scans or inherited by processes cells spawn.
+        self.judge_direct: str | None = None
 
 
 _CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -1788,6 +1792,8 @@ def _install_builtins(ns: dict) -> None:
     ns["__omp_magic_cell"] = __omp_magic_cell
     ns["__omp_shell"] = __omp_shell
     ns["__omp_current_run_id__"] = lambda: _CURRENT_RID.get()
+    # Judge transport handed off per request (kept out of `os.environ`).
+    ns["__omp_judge_direct__"] = lambda: _STATE.judge_direct
 
 
 _install_builtins(_STATE.user_ns)
@@ -2043,6 +2049,12 @@ _MANAGED_ENV_KEYS = (
     "PI_EVAL_LOCAL_ROOTS",
 )
 
+# Managed env keys stashed into `_STATE` instead of `os.environ`: key-bearing
+# transports, mapped to the `_RunnerState` attribute the prelude accessor reads.
+_ENV_STASHED_KEYS = {
+    "PI_JUDGE_DIRECT": "judge_direct",
+}
+
 
 def _apply_request_runtime(req: dict) -> None:
     cwd = req.get("cwd")
@@ -2057,6 +2069,14 @@ def _apply_request_runtime(req: dict) -> None:
     env = req.get("env")
     if isinstance(env, dict):
         for key in _MANAGED_ENV_KEYS:
+            if key in _ENV_STASHED_KEYS:
+                # Transports resolved host-side carry provider API keys: the
+                # runner keeps them out of `os.environ` (cells scan that, and
+                # child processes inherit it) and exposes them to the prelude
+                # via their `__omp_*__()` accessors instead.
+                setattr(_STATE, _ENV_STASHED_KEYS[key], env.get(key))
+                os.environ.pop(key, None)
+                continue
             value = env.get(key)
             if isinstance(value, str):
                 os.environ[key] = value

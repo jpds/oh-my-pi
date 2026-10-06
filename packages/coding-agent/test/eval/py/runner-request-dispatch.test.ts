@@ -587,4 +587,46 @@ describe("Python runner request dispatch", () => {
 			await runner.dispose();
 		}
 	});
+
+	it("hands the host-resolved judge transport to the prelude without exposing it to the cell environment", async () => {
+		// The judge transport carries a provider API key. A cell that scans
+		// `os.environ` (or spawns a child that inherits it) must not see it;
+		// only the runner-held `__omp_judge_direct__()` accessor does. The
+		// pre-fix runner kept the descriptor in `os.environ` for the kernel's
+		// lifetime, so the exfiltration assertion below observed the key.
+		const judge = { api: "typesafe", apiKey: "ts-key-secret" };
+		const runner = spawnRunner();
+		try {
+			runner.send({
+				id: "cell",
+				env: { PI_JUDGE_DIRECT: JSON.stringify(judge) },
+				code: [
+					"import json, os",
+					"print(json.dumps({",
+					'    "judge_in_env": os.environ.get("PI_JUDGE_DIRECT"),',
+					'    "judge_through_accessor": __omp_judge_direct__(),',
+					"}))",
+				].join("\n"),
+			});
+			// stdout and done frames are consumed in stream order; collect both.
+			let printed: { judge_in_env: string | null; judge_through_accessor: unknown } | undefined;
+			let done: RunnerFrame | undefined;
+			while (!printed || !done) {
+				const frame = await runner.nextFrame();
+				if (frame.type === "stdout" && frame.data && frame.id === "cell") {
+					printed = JSON.parse(frame.data);
+				} else if (frame.type === "done" && frame.id === "cell") {
+					done = frame;
+				}
+			}
+			expect(done.status).toBe("ok");
+			// The accessor hands the raw descriptor JSON; the prelude parses it.
+			expect(printed).toEqual({
+				judge_in_env: null,
+				judge_through_accessor: JSON.stringify(judge),
+			});
+		} finally {
+			await runner.dispose();
+		}
+	});
 });

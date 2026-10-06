@@ -866,10 +866,13 @@ if "__omp_prelude_loaded__" not in globals():
 
     # --- direct judgment (PI_JUDGE_DIRECT; no host bridge) -----------------
     #
-    # Host injects the resolved native judge transport as PI_JUDGE_DIRECT JSON;
-    # `judge`/`judge_batch` then POST the provider directly. Without a
-    # descriptor they fall back to the host bridge, preserving judge-role
-    # chains with non-native candidates.
+    # Host injects the resolved native judge transport per request; the runner
+    # keeps it out of `os.environ` (so cell code cannot `os.environ` the key
+    # and child processes never inherit it) and hands it to the prelude through
+    # the runner-injected `__omp_judge_direct__()` accessor. Standalone prelude
+    # consumers without a runner still read the `PI_JUDGE_DIRECT` env var.
+    # Without a descriptor they fall back to the host bridge, preserving
+    # judge-role chains with non-native candidates.
 
     _JUDGE_MAX_ATTEMPTS = 3
     _JUDGE_BACKOFF_BASE_S = 0.5
@@ -882,10 +885,13 @@ if "__omp_prelude_loaded__" not in globals():
     _JUDGE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def _judge_direct_descriptor() -> dict | None:
-        """Resolved native judge transport (PI_JUDGE_DIRECT JSON), or None."""
-        raw = os.environ.get("PI_JUDGE_DIRECT")
+        """Resolved native judge transport (runner-held `__omp_judge_direct__()` or PI_JUDGE_DIRECT env), or None."""
+        accessor = globals().get("__omp_judge_direct__")
+        raw = accessor() if callable(accessor) else os.environ.get("PI_JUDGE_DIRECT")
         if not raw:
             return None
+        if isinstance(raw, dict):
+            return raw
         try:
             descriptor = json.loads(raw)
         except json.JSONDecodeError:
@@ -978,21 +984,13 @@ if "__omp_prelude_loaded__" not in globals():
             return min(retry_after_s, _JUDGE_BACKOFF_MAX_S)
         return min(_JUDGE_BACKOFF_BASE_S * (2**attempt), _JUDGE_BACKOFF_MAX_S)
 
-    def _systemone_post(descriptor: dict, body: dict) -> dict:
-        """POST one System One request; retries transient failures (408/429/5xx, network)."""
-        url = descriptor["baseUrl"].rstrip("/") + descriptor["route"]
-        label = f"{descriptor.get('provider', 'typesafe')}/{descriptor.get('model')}"
-        headers = {
-            "Authorization": f"Bearer {descriptor['apiKey']}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        headers.update(descriptor.get("headers") or {})
+    def _http_post_retry(url: str, headers: dict, body: dict, label: str, timeout_s: float) -> dict:
+        """POST one JSON request; retries transient failures (408/429/5xx, network)."""
         data = json.dumps(body).encode("utf-8")
         for attempt in range(_JUDGE_MAX_ATTEMPTS):
             req = urllib.request.Request(url, data=data, method="POST", headers=headers)
             try:
-                with _JUDGE_OPENER.open(req, timeout=_JUDGE_TIMEOUT_S) as resp:
+                with _JUDGE_OPENER.open(req, timeout=timeout_s) as resp:
                     return json.loads(resp.read())
             except urllib.error.HTTPError as exc:
                 detail = exc.read()
@@ -1005,10 +1003,22 @@ if "__omp_prelude_loaded__" not in globals():
             except (urllib.error.URLError, TimeoutError) as exc:
                 if attempt + 1 >= _JUDGE_MAX_ATTEMPTS:
                     raise RuntimeError(
-                        f"judge transport {url} failed after {_JUDGE_MAX_ATTEMPTS} attempts: {exc}"
+                        f"{label} transport {url} failed after {_JUDGE_MAX_ATTEMPTS} attempts: {exc}"
                     ) from exc
                 time.sleep(_judge_backoff_s(attempt, None))
         raise RuntimeError("unreachable")
+
+    def _systemone_post(descriptor: dict, body: dict) -> dict:
+        """POST one System One judgment request to the native judge transport."""
+        url = descriptor["baseUrl"].rstrip("/") + descriptor["route"]
+        label = f"{descriptor.get('provider', 'typesafe')}/{descriptor.get('model')}"
+        headers = {
+            "Authorization": f"Bearer {descriptor['apiKey']}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        headers.update(descriptor.get("headers") or {})
+        return _http_post_retry(url, headers, body, label, _JUDGE_TIMEOUT_S)
 
     def _judge_shape_answers(descriptor: dict, wire_questions: dict, response) -> tuple[dict, str]:
         if not isinstance(response, dict) or not isinstance(response.get("answers"), dict):
@@ -1150,6 +1160,11 @@ if "__omp_prelude_loaded__" not in globals():
                     self._model = result["model"]
                 if len(self._settled) >= self.total:
                     self._running = False
+                    # Drop the transport (it carries the API key) once every
+                    # item has settled: nothing judges again, and the registry
+                    # entry keeps attach-after-completion working without
+                    # retaining secrets.
+                    self._descriptor = None
                     if self._cancelled:
                         self._error = "judge_batch cancelled"
                     elif self.total - self._failed < self._min_ok:

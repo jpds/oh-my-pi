@@ -6,12 +6,13 @@ const pythonPath = Bun.env.PYTHON ?? ($which("python3") ? "python3" : "python");
 async function runPrelude(
 	code: string,
 	env: Record<string, string>,
+	setup?: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 	const prelude = PYTHON_PRELUDE.replace(
 		"from __future__ import annotations",
 		"from __future__ import annotations\n__omp_display = lambda *args, **kwargs: None",
 	);
-	const script = `${prelude}\n${code}`;
+	const script = setup ? `${prelude}\n${setup}\n${code}` : `${prelude}\n${code}`;
 	// The full prelude exceeds Windows' ~32k `python -c` command-line limit
 	// (ENAMETOOLONG); a script file behaves identically on every platform.
 	const dir = await TempDir.create("omp-py-prelude-");
@@ -302,6 +303,8 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 					'        "total": status["total"],',
 					'        "model": status.get("model"),',
 					'        "attach_same": judge_batch.attach(b.id).id == b.id,',
+					'        "result_keys": sorted(b.results().keys()),',
+					'        "descriptor_dropped": [r._descriptor for r in _JUDGE_BATCHES.values()] == [None],',
 					"    }, sort_keys=True))",
 					"asyncio.run(main())",
 				].join("\n"),
@@ -316,12 +319,28 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 			expect(value).toEqual({
 				ok_keys: ["x"],
 				failed_keys: ["y"],
-				results: { x: { q: { type: "bool", bool: 1 } } },
+				// results() returns the unified item shape ({key, answers, error, model}).
+				results: {
+					x: {
+						key: "x",
+						answers: { q: { type: "bool", bool: 1 } },
+						error: null,
+						model: "typesafe/jev-preview",
+					},
+					y: {
+						key: "y",
+						answers: null,
+						error: "typesafe/jev-preview API error (500): b'boom'",
+						model: null,
+					},
+				},
+				result_keys: ["x", "y"],
 				done: 2,
 				failed: 1,
 				total: 2,
 				model: "typesafe/jev-preview",
 				attach_same: true,
+				descriptor_dropped: true,
 			});
 		} finally {
 			server.stop(true);
@@ -406,6 +425,55 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		const errors = JSON.parse(result.stdout.trim());
 		// Each surface reports the helper the cell actually called, not a generic bridge error.
 		expect(errors).toEqual(["tool.read(...)", "omp_find() prelude helper", "wait()", "completion()", "agent()"]);
+	});
+
+	it("judge() reads the descriptor through the runner accessor, not the environment", async () => {
+		// The runner hands the transport to the prelude out-of-band (`__omp_judge_direct__()`),
+		// so a cell scanning `os.environ` finds no key.
+		let requests = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async request => {
+				requests++;
+				await request.json();
+				return Response.json({
+					model: "jev-preview",
+					answers: { q: { type: "noul", noul: 1 } },
+					usage: {},
+				});
+			},
+		});
+
+		try {
+			const descriptor = {
+				api: "typesafe",
+				route: "/v1/systemone",
+				provider: "typesafe",
+				model: "jev-preview",
+				baseUrl: server.url.toString(),
+				apiKey: "ts-key",
+			};
+			const result = await runPrelude(
+				[
+					"import os as _os",
+					"async def main():",
+					"    assert _os.environ.get('PI_JUDGE_DIRECT') is None",
+					'    answers = await judge("hello", {"q": {"type": "bool", "instructions": "non-empty?"}})',
+					"    print(json.dumps(answers, sort_keys=True))",
+					"asyncio.run(main())",
+				].join("\n"),
+				{},
+				"__omp_judge_direct__ = lambda: json.dumps(" + JSON.stringify(descriptor) + ")",
+			);
+
+			expect(result.stderr).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout.trim())).toEqual({ q: { type: "bool", bool: 1 } });
+			expect(requests).toBe(1);
+		} finally {
+			server.stop(true);
+		}
 	});
 
 	it("rejects judge() arguments client-side without touching the network", async () => {

@@ -129,8 +129,9 @@ export interface PythonExecutorOptions {
 	/** @internal Bridge endpoint info, set by `executePython` before delegating. */
 	bridge?: { url: string; token: string };
 	/**
-	 * @internal Resolved native judge transport, set by `executePython`; exported
-	 * to the kernel as `PI_JUDGE_DIRECT` so `judge`/`judge_batch` skip the bridge.
+	 * @internal Resolved native judge transport, set by `executePython`; handed
+	 * to the kernel per request (kept out of the subprocess environment) so
+	 * `judge`/`judge_batch` skip the bridge.
 	 */
 	judgeDirect?: NativeJudgeDescriptor;
 }
@@ -241,7 +242,10 @@ async function startKernel(cwd: string, options: PythonExecutorOptions): Promise
 	requireRemainingTimeoutMs(options.deadlineMs);
 	return await PythonKernel.start({
 		cwd,
-		env: buildManagedKernelEnv(options),
+		// The judge transport carries the provider API key: it reaches the
+		// runner per request (executeWithKernelBase's env patch), never in the
+		// subprocess environment.
+		env: buildManagedKernelEnv(options, { omitJudgeDirect: true }),
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
 		interpreter: options.interpreter,
