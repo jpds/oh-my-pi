@@ -328,6 +328,12 @@ interface ManagedKernelEnvOptions {
 }
 interface ManagedKernelEnvPolicy {
 	sparse?: boolean;
+	/**
+	 * Spawn-env policy: the direct judge transport carries a provider API key
+	 * and must stay out of the kernel subprocess environment. The runner
+	 * receives it per request (env patch) and stashes it runner-side.
+	 */
+	omitJudgeDirect?: boolean;
 }
 
 export function buildManagedKernelEnvPatch(options: ManagedKernelEnvOptions): Record<string, string | null>;

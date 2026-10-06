@@ -240,7 +240,10 @@ async function startKernel(cwd: string, options: PythonExecutorOptions): Promise
 	requireRemainingTimeoutMs(options.deadlineMs);
 	const kernel = await PythonKernel.start({
 		cwd,
-		env: buildManagedKernelEnv(options),
+		// The judge transport carries the provider API key: it reaches the
+		// runner per request (executeWithKernelBase's env patch), never in the
+		// subprocess environment.
+		env: buildManagedKernelEnv(options, { omitJudgeDirect: true }),
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
 		interpreter: options.interpreter,
