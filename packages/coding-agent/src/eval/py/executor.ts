@@ -242,10 +242,9 @@ async function startKernel(cwd: string, options: PythonExecutorOptions): Promise
 	requireRemainingTimeoutMs(options.deadlineMs);
 	return await PythonKernel.start({
 		cwd,
-		// The judge transport carries the provider API key: it reaches the
-		// runner per request (executeWithKernelBase's env patch), never in the
-		// subprocess environment.
-		env: buildManagedKernelEnv(options, { omitJudgeDirect: true }),
+		// The key-bearing judge transport rides the per-request env patch, not
+		// the subprocess environment.
+		env: buildManagedKernelEnv(options, { omitDirectTransports: true }),
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
 		interpreter: options.interpreter,

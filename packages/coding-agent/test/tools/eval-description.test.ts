@@ -89,7 +89,7 @@ describe("eval tool description", () => {
 		}
 	});
 
-	it("gates only tool-definition guidance, not budget or completion", () => {
+	it("gates only tool-definition guidance, not budget", () => {
 		const enabled = getEvalDocTopics({ evalTools: true });
 		const disabled = getEvalDocTopics({ evalTools: false });
 		expect(getEvalToolDescription({ evalTools: true })).toContain("@tool");
@@ -98,7 +98,6 @@ describe("eval tool description", () => {
 		expect(getEvalToolDescription({ evalTools: false })).not.toContain("@tool");
 		expect(disabled.helpers).not.toContain("tool(fn");
 		expect(disabled.helpers).toContain("budget.total");
-		expect(disabled.judge).toContain("completion(prompt");
 		expect(disabled.agents).not.toContain("tools?=None");
 	});
 
@@ -122,13 +121,7 @@ describe("eval tool description", () => {
 			expect(linked).toContain(uri);
 			expect(inlined).not.toContain(uri);
 		}
-		for (const api of [
-			"completion(prompt",
-			"judge(state, questions)",
-			"budget.total",
-			"tool(fn, name=",
-			"agent(prompt",
-		]) {
+		for (const api of ["judge(state, questions)", "budget.total", "tool(fn, name=", "agent(prompt"]) {
 			expect(linked).not.toContain(api);
 			expect(inlined).toContain(api);
 		}
@@ -140,7 +133,7 @@ describe("eval tool description", () => {
 		session.getToolByName = name => (name === "eval" ? (evalTool as unknown as AgentTool) : undefined);
 		const readTool = new ReadTool(session);
 		for (const [topic, signature] of [
-			["judge", "completion(prompt"],
+			["judge", "judge(state, questions)"],
 			["helpers", "budget.total"],
 			["helpers", "%load <path>"],
 		]) {

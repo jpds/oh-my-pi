@@ -1091,7 +1091,10 @@ if "__omp_prelude_loaded__" not in globals():
     class _LocalBatchRun:
         """Kernel-owned bulk judgment run (mirrors the host-side `JudgmentBatch`).
 
-        Item failures are recorded per key, never raised; `drain` raises only on
+        Kernel-scoped, not a host job: `wait`, completion auto-delivery, and
+        `agent://` addressing don't see it; `drain` is the only observation
+        surface, and attach re-creates refs only within this kernel. Item
+        failures are recorded per key, never raised; `drain` raises only on
         wholesale death (`min_ok` unmet, cancelled).
         """
 
@@ -1351,9 +1354,10 @@ if "__omp_prelude_loaded__" not in globals():
     class JudgmentBatch:
         """Bulk judgment run. Pull settled items with ``await drain()`` across as many cells as needed.
 
-        ``judge_batch()`` returns synchronously (the host owns the run), but the
-        batch is awaitable and resolves to itself, so ``await judge_batch(...)``
-        and ``judge_batch(...)`` are interchangeable.
+        ``judge_batch()`` returns synchronously (host-owned on the bridge path;
+        kernel-scoped under a native judge), but the batch is awaitable and
+        resolves to itself, so ``await judge_batch(...)`` and
+        ``judge_batch(...)`` are interchangeable.
         """
 
         __slots__ = ("id", "total", "intent", "_backend")
@@ -1365,8 +1369,7 @@ if "__omp_prelude_loaded__" not in globals():
             self._backend = backend
 
         def __await__(self):
-            # judge_batch() returns synchronously (the host owns the run);
-            # awaiting the batch resolves to itself, so `await judge_batch(...)`
+            # Awaiting the batch resolves to itself: `await judge_batch(...)`
             # and `judge_batch(...)` are interchangeable.
             if False:
                 yield
@@ -1434,9 +1437,12 @@ if "__omp_prelude_loaded__" not in globals():
         """Judge every state with the same ``questions``; returns a ``JudgmentBatch`` to drain across cells.
 
         ``states`` is ``{key: state}`` or a list (keys are indices). ``intent`` is an
-        optional nonempty progress/job label. The batch is awaitable and resolves to
-        itself, so ``await judge_batch(...)`` also works. Item failures land in
-        ``JudgmentItem.error``; only a run that dies wholesale raises from ``drain()``.
+        optional nonempty progress/job label. Host-owned when judging goes through
+        the tool bridge; under a native judge the run is kernel-scoped (no host
+        job: no auto-delivery, ``b.id`` only attaches within this kernel). The
+        batch is awaitable and resolves to itself, so ``await judge_batch(...)``
+        also works. Item failures land in ``JudgmentItem.error``; only a run
+        that dies wholesale raises from ``drain()``.
         """
         questions = _judge_questions(questions)
         if intent is not None and (
