@@ -332,6 +332,12 @@ interface ManagedKernelEnvOptions {
 }
 interface ManagedKernelEnvPolicy {
 	sparse?: boolean;
+	/**
+	 * Spawn-env policy: the direct judge transport carries a provider API key
+	 * and must stay out of the kernel subprocess environment. The runner
+	 * receives it per request (env patch) and stashes it runner-side.
+	 */
+	omitJudgeDirect?: boolean;
 }
 
 export function buildManagedKernelEnvPatch(options: ManagedKernelEnvOptions): Record<string, string | null>;
@@ -353,7 +359,7 @@ export function buildManagedKernelEnvPatch(
 			patch.PI_TOOL_BRIDGE_TOKEN = options.bridge.token;
 			patch.PI_TOOL_BRIDGE_SESSION = options.bridgeSessionId ?? "";
 		}
-		if (options.judgeDirect) patch.PI_JUDGE_DIRECT = JSON.stringify(options.judgeDirect);
+		if (options.judgeDirect && !policy.omitJudgeDirect) patch.PI_JUDGE_DIRECT = JSON.stringify(options.judgeDirect);
 		if (localRoots) patch.PI_EVAL_LOCAL_ROOTS = JSON.stringify(localRoots);
 		return patch;
 	}
@@ -363,7 +369,7 @@ export function buildManagedKernelEnvPatch(
 		PI_TOOL_BRIDGE_URL: options.bridge?.url ?? null,
 		PI_TOOL_BRIDGE_TOKEN: options.bridge?.token ?? null,
 		PI_TOOL_BRIDGE_SESSION: options.bridge && options.bridgeSessionId ? options.bridgeSessionId : null,
-		PI_JUDGE_DIRECT: options.judgeDirect ? JSON.stringify(options.judgeDirect) : null,
+		PI_JUDGE_DIRECT: options.judgeDirect && !policy?.omitJudgeDirect ? JSON.stringify(options.judgeDirect) : null,
 		PI_EVAL_LOCAL_ROOTS: localRoots && Object.keys(localRoots).length > 0 ? JSON.stringify(localRoots) : null,
 	};
 }
