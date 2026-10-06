@@ -2070,10 +2070,7 @@ def _apply_request_runtime(req: dict) -> None:
     if isinstance(env, dict):
         for key in _MANAGED_ENV_KEYS:
             if key in _ENV_STASHED_KEYS:
-                # Transports resolved host-side carry provider API keys: the
-                # runner keeps them out of `os.environ` (cells scan that, and
-                # child processes inherit it) and exposes them to the prelude
-                # via their `__omp_*__()` accessors instead.
+                # Keep out of os.environ (see _ENV_STASHED_KEYS); prelude reads via accessor.
                 setattr(_STATE, _ENV_STASHED_KEYS[key], env.get(key))
                 os.environ.pop(key, None)
                 continue
