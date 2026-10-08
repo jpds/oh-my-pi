@@ -114,6 +114,29 @@ describe("eval tool description", () => {
 		expect(pyOnly.helpers).not.toContain("await budget.total()");
 	});
 
+	it("names each language's helper spelling in the reference", () => {
+		// The topic is rendered once per session with every enabled language's
+		// `py`/`js` flag true, so a `{{#if js}}…{{else}}…{{/if}}` split would
+		// show only one language's spelling to a model that has both enabled.
+		const both = getEvalDocTopics({ py: true, js: true });
+		expect(both.judge).toContain("`judge_batch`");
+		expect(both.judge).toContain("`judgeBatch`");
+		expect(both.judge).toContain("b.drain_iter(timeout)");
+		expect(both.judge).toContain("b.drainIter({ timeout })");
+		expect(both.agents).toContain("schema_mode/schemaMode");
+		const pyOnly = getEvalDocTopics({ py: true, js: false });
+		expect(pyOnly.judge).toContain("`judge_batch`");
+		expect(pyOnly.judge).not.toContain("`judgeBatch`");
+		expect(pyOnly.agents).toContain("schema_mode?");
+		expect(pyOnly.agents).not.toContain("schemaMode");
+		const jsOnly = getEvalDocTopics({ py: false, js: true });
+		expect(jsOnly.judge).toContain("`judgeBatch`");
+		expect(jsOnly.judge).not.toContain("`judge_batch`");
+		expect(jsOnly.agents).toContain("schemaMode?");
+		expect(jsOnly.agents).not.toContain("schema_mode");
+		expect(getEvalToolDescription({ py: true, js: true })).toContain("`judge_batch`/`judgeBatch`");
+	});
+
 	it("inlines every topic when the session cannot read xd:// URLs", () => {
 		const linked = new EvalTool(makeSession({})).description;
 		const inlined = new EvalTool(makeSession({ readActive: false })).description;

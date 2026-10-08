@@ -198,6 +198,7 @@
 - In Tern the spinner, elapsed time and intent share one activity line with the todo, which stays in place between turns, and the tok/s readout moves into the composer bar after the thinking level
 - Computer-use desktop captures now default to the focused window's monitor, with primary-monitor fallback; `computer.display: all` remains available explicitly.
 - Computer-use guidance selects AX for semantic controls and screenshots for custom-drawn surfaces, with grouped actions and explicit state verification.
+- `judge_batch`/`judgeBatch` consumption is consistent: `results()` returns `{key: item}` in the same item shape `drain()` yields (successes and failures; was `{key: answers}`), Python `JudgmentItem` is a dict so `json.dumps(list(b.drain()))` and `json.dumps(b.results())` work, `drain()` always returns a list, and the Python batch is awaitable so `await judge_batch(...)` also works
 - Bash commands that print binary or other non-UTF-8 output no longer stall while their output is decoded ([#14454](https://github.com/can1357/oh-my-pi/pull/14454) by [@H4vC](https://github.com/H4vC))
 - Edit previews stay responsive while long edits stream, and `read` parses large files for block context off the main thread ([#14520](https://github.com/can1357/oh-my-pi/pull/14520) by [@H4vC](https://github.com/H4vC))
 - While a `sloppy`-mode edit streams, its preview no longer guesses an edit for a `*** Find` whose `*** Replace` has not arrived yet; the preview of an earlier file section that ends in a bare `*** Find` still matches what will be applied ([#14520](https://github.com/can1357/oh-my-pi/pull/14520) by [@H4vC](https://github.com/H4vC))
@@ -217,6 +218,8 @@
 - Fixed snapcompact archives stopping at 17 frames on models that read 1568px frames (OpenAI, Codex, and Claude before Opus 4.7); they now keep 26 under the same 3 MB image payload cap, and an archive whose frames run heavier than estimated is re-rendered with fewer frames instead of being rejected ([#14277](https://github.com/can1357/oh-my-pi/pull/14277) by [@will-bogusz](https://github.com/will-bogusz)).
 - Preserved original-detail image pixels through both Eval runtimes instead of resizing screenshots again and requiring model-side coordinate conversion.
 - Retired queued and in-flight native input on computer-run cancellation and teardown, including unawaited operations, without canceling later runs.
+- `judge()`/`judgeBatch()` questions accept a list of `{id, ...question}` entries keyed on the embedded id, and a wrong shape fails with a message stating the expected one instead of an opaque kernel TypeError
+- `eval` cells no longer have to repeat `language` every call: an omitted language reuses the last language the session ran (first enabled language otherwise)
 - Fixed the `/usage` sheet in Tern missing the Close button the other report sheets have ([#14455](https://github.com/can1357/oh-my-pi/pull/14455) by [@H4vC](https://github.com/H4vC)).
 - Fixed a browser page load abandoned by cancelling a run still replacing the page afterwards; the cancelled load is now stopped, so a run that had taken over request interception also returns at once instead of failing with "Failed to restore browser request interception". Cancelling a run that is not navigating leaves the page's in-flight requests alone ([#14425](https://github.com/can1357/oh-my-pi/pull/14425) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed cancelling a bash command on Windows sometimes terminating an unrelated program ([#14454](https://github.com/can1357/oh-my-pi/pull/14454) by [@H4vC](https://github.com/H4vC))
@@ -275,18 +278,22 @@
 
 ### Added
 
-- Eval kernels judge without the tool bridge: when the judge role resolves to a native System One judge, its transport is handed to the Python runner per request (kept out of the kernel's `os.environ`, so cells and their child processes cannot read the provider API key) and Python `judge`/`judge_batch` call the provider directly, so judgment works in sandboxes that refuse loopback TCP.
-- `PI_NO_TOOL_BRIDGE=1` skips the eval tool bridge entirely (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers fail fast with a typed, actionable error instead of dialing an unreachable endpoint.
+- Eval kernels reach host-mediated helpers without the tool bridge: the Python runner forwards `judge`, `judge_batch`, `completion()`, `agent()`, `tool.*`, and the other helpers to the host over its stdio control channel, so they work in sandboxes that refuse loopback TCP and no provider credential ever enters the kernel process.
+- `PI_NO_TOOL_BRIDGE=1` skips the eval HTTP tool bridge (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers then run over the runner's stdio channel instead of failing with a typed error.
 
 ### Changed
 
-- Python `judge_batch` runs kernel-locally in direct mode: batches live in the kernel (survive across cells via `judge_batch.attach(id)` within the kernel) rather than host-side; usage is not priced into session cost ledgers for direct judgment calls. Docs now state this scope: kernel-local runs are not host jobs, so `wait`/completion auto-delivery/`agent://` addressing don't apply, `cost` reads 0.0, and a completed batch's transport is released.
+- Python `judge`/`judge_batch` calls are host-mediated like JS: batches are host-owned jobs, so `wait`, completion auto-delivery, `agent://` addressing, and `status().cost` apply to them.
 - Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
 - The `Python tool bridge listening` line is now durable (info-level) and the stop is logged too, so an unreachable bridge is diagnosable from the session log.
+- `judge_batch`/`judgeBatch` item keys are strings in both runtimes: `drain()` tuples, `item.key`, and the `results()`/`failed()` dict keys now agree for list-form states, whose indices were numbers in `drain()` and strings in `results()`.
 
 ### Fixed
 
 - Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
+- The `judge_batch`/`judgeBatch` reference names each runtime's helpers (`judge_batch`/`judgeBatch`, `drain_iter`/`drainIter`) instead of hiding the JS names when Python is also enabled, and notes that JS batch methods return Promises.
+- `judge_batch`/`judgeBatch` `drain()` no longer raises `judge_batch cancelled` for a cancelled run that still met `min_ok`; `cancel()` stops further dispatch (in-flight items finish, unstarted ones settle as `cancelled`).
+- `judge_batch`/`judgeBatch` `status().elapsedS` freezes when the run settles instead of reporting time since start.
 
 ## [18.6.2] - 2026-10-04
 
