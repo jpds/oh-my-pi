@@ -506,10 +506,12 @@ describe("judge_batch bridge", () => {
 			model: "p/smol",
 		});
 		expect(final.error).toBeUndefined();
+		// results() mirrors drain()'s item shape for every settled item, failures included.
 		expect(await runEvalJudgmentBatch({ op: "results", id: created.id }, { session })).toEqual({
 			results: {
-				"0": { tests: { type: "bool", bool: 1 } },
-				"2": { tests: { type: "bool", bool: 0 } },
+				"0": { key: 0, answers: { tests: { type: "bool", bool: 1 } }, model: "p/smol" },
+				"1": { key: 1, error: expect.stringContaining('judgment "tests"') },
+				"2": { key: 2, answers: { tests: { type: "bool", bool: 0 } }, model: "p/smol" },
 			},
 		});
 		const failed = (await runEvalJudgmentBatch({ op: "failed", id: created.id }, { session })) as {
@@ -676,6 +678,78 @@ describe("judgeBatch() JS runtime", () => {
 		}
 	});
 });
+
+describe("judgeBatch() JS prelude", () => {
+	it("maps states to keyed items and drainIter stops on an empty drain", async () => {
+		const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+		const drains = [
+			{
+				items: [
+					{
+						key: "a",
+						answers: { ok: { type: "bool", bool: 1 } },
+						model: "p/smol",
+					},
+				],
+			},
+			{ items: [{ key: "b", error: "boom" }] },
+			{ items: [] },
+		];
+		const results = {
+			a: { key: "a", answers: { ok: { type: "bool", bool: 1 } }, model: "p/smol" },
+			b: { key: "b", error: "boom" },
+		};
+		const sandbox: Record<string, unknown> = {
+			__omp_call_tool__: async (name: string, args: Record<string, unknown>) => {
+				calls.push({ name, args });
+				if (name !== "__judge_batch__") throw new Error(`unexpected bridge call ${name}`);
+				if (args.op === "create") return { id: "jdgb-1", total: 2 };
+				if (args.op === "drain") return drains.shift();
+				if (args.op === "results") return { results };
+				if (args.op === "status") return { id: "jdgb-1", done: 2, total: 2, failed: 1, running: false };
+				throw new Error(`unexpected op ${String(args.op)}`);
+			},
+		};
+		vm.createContext(sandbox);
+		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
+
+		const seen = await vm.runInContext(
+			`(async () => {
+				const b = await judgeBatch({ a: "first", b: "second" }, { ok: { type: "bool", instructions: "?" } }, { concurrency: 4 });
+				const out = [];
+				for await (const [key, item] of b.drainIter({ timeout: 30 })) out.push([key, item.ok, item.answers ?? item.error]);
+				const settled = await b.results();
+				return { id: b.id, total: b.total, out, settled, status: await b.status() };
+			})()`,
+			sandbox,
+		);
+
+		expect(seen).toEqual({
+			id: "jdgb-1",
+			total: 2,
+			out: [
+				["a", true, { ok: { type: "bool", bool: 1 } }],
+				["b", false, "boom"],
+			],
+			settled: results,
+			status: { id: "jdgb-1", done: 2, total: 2, failed: 1, running: false },
+		});
+		expect(calls[0]?.args).toEqual({
+			op: "create",
+			items: [
+				{ key: "a", state: "first" },
+				{ key: "b", state: "second" },
+			],
+			questions: { ok: { type: "bool", instructions: "?" } },
+			concurrency: 4,
+		});
+		const drainCalls = calls.filter(call => call.args.op === "drain");
+		expect(drainCalls).toHaveLength(3);
+		expect(drainCalls[0]?.args.id).toBe("jdgb-1");
+		expect(drainCalls[0]?.args.timeoutMs).toBeLessThanOrEqual(30_000);
+>>>>>>> 971f84fff0 (fix(eval): judge helper surface: list-form questions, unified shapes, labeled errors)
+	});
+});
 async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<PythonResult> {
 	const repoRoot = path.resolve(import.meta.dir, "../../..");
 	const scriptPath = path.join(tempDir.path(), "run-python-judge-batch.ts");
@@ -688,11 +762,12 @@ async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<Python
 	const cellOne = [
 		"import json",
 		'Q = {"tests": {"type": "bool", "instructions": "Does the request mention tests?"}}',
-		'b = judge_batch({"a": "add tests please", "b": "rename a local"}, Q, intent="Classifying: Test idiomacy")',
+		'b = await judge_batch({"a": "add tests please", "b": "rename a local"}, Q, intent="Classifying: Test idiomacy")',
 		"first = await b.drain(timeout=30)",
 		"second = await b.drain(timeout=30)",
 		"items = sorted(first + second, key=lambda kv: kv[0])",
 		"single = await judge('write tests', Q)",
+		"listanswers = await judge('write tests', [{'id': 'tests', 'type': 'bool', 'instructions': 'Does the request mention tests?'}])",
 		`image_batch = judge_batch({1.0: "image-float-one", "1": "image-string-one", 1.25: "image-fractional", 2.5: "image-invalid"}, Q, images={1.0: [${JSON.stringify(IMAGE_ONE)}], "1": [${JSON.stringify(IMAGE_TWO)}], 1.25: [${JSON.stringify(IMAGE_TWO)}], 2.5: "not an image list"}, retries=0)`,
 		"image_items = [entry async for entry in image_batch.drain_iter(timeout=30)]",
 		"image_results = {repr(k): [i.ok, i.answers or i.error] for k, i in image_items}",
@@ -703,13 +778,18 @@ async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<Python
 		"    unknown_image_error = str(error)",
 		"else:",
 		'    raise AssertionError("unknown image key was accepted")',
-		'print(json.dumps({"id": b.id, "total": b.total, "items": [[k, i.ok, i.answers or i.error] for k, i in items], "single": single, "image_items": image_results, "unknown_image_error": unknown_image_error}))',
+		"qerr = None",
+		"try:",
+		"    await judge('x', 'nope')",
+		"except TypeError as exc:",
+		"    qerr = str(exc)",
+		'print(json.dumps({"id": b.id, "total": b.total, "items": [[k, i.ok, i.answers or i.error] for k, i in items], "single": single, "listanswers": listanswers, "qerr": qerr, "image_items": image_results, "unknown_image_error": unknown_image_error}))',
 	].join("\n");
 	const cellTwo = [
 		"import json",
 		"again = judge_batch.attach(b.id)",
 		"rest = await again.drain(timeout=0)",
-		'print(json.dumps({"rest": rest, "status": again.status()["done"], "results": sorted(again.results())}))',
+		'print(json.dumps({"rest": rest, "status": again.status()["done"], "results": again.results(), "failed": again.failed(), "dumped": json.dumps(rest)}))',
 		"again.close()",
 	].join("\n");
 	await Bun.write(
@@ -794,9 +874,22 @@ describe("judge_batch() Python prelude", () => {
 					["b", true, { tests: { type: "bool", bool: 0 } }],
 				],
 				single: { tests: { type: "bool", bool: 1 } },
+				listanswers: { tests: { type: "bool", bool: 1 } },
+				qerr: expect.stringContaining(
+					'judge questions must be a dict keyed by id ({q_best: {...}}) or a list of {"id": ...',
+				),
 			});
 			expect(String(one.id)).toMatch(/^jdgb-/);
-			expect(two).toEqual({ rest: [], status: 2, results: ["a", "b"] });
+			expect(two).toEqual({
+				rest: [],
+				status: 2,
+				results: {
+					a: { key: "a", answers: { tests: { type: "bool", bool: 1 } }, error: null, model: "p/smol" },
+					b: { key: "b", answers: { tests: { type: "bool", bool: 0 } }, error: null, model: "p/smol" },
+				},
+				failed: {},
+				dumped: "[]",
+			});
 			expect(one.image_items).toEqual({
 				"1": [true, { tests: { type: "bool", bool: 1 } }],
 				"'1'": [true, { tests: { type: "bool", bool: 1 } }],

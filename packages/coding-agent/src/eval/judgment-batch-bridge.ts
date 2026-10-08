@@ -93,7 +93,7 @@ export interface EvalJudgmentBatchBridgeOptions {
 export type EvalJudgmentBatchResult =
 	| JudgmentBatchStatus
 	| { items: JudgmentBatchItem[] }
-	| { results: Record<string, Record<string, CellAnswer>> }
+	| { results: Record<string, JudgmentBatchItem> }
 	| { failed: Record<string, string> }
 	| { cancelled: boolean }
 	| { closed: boolean };
@@ -290,9 +290,10 @@ export class JudgmentBatch {
 		return [];
 	}
 
-	results(): Record<string, Record<string, CellAnswer>> {
-		const out: Record<string, Record<string, CellAnswer>> = {};
-		for (const item of this.#settled) if (item.answers) out[String(item.key)] = item.answers;
+	/** All settled items (successes and failures) keyed by id, mirroring `drain()`'s item shape. */
+	results(): Record<string, JudgmentBatchItem> {
+		const out: Record<string, JudgmentBatchItem> = {};
+		for (const item of this.#settled) out[String(item.key)] = item;
 		return out;
 	}
 
