@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import { getProjectDir, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { OutputArtifactError } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import type { ToolSession } from "../../tools";
-import { resolveNativeJudgeDescriptor, type NativeJudgeDescriptor } from "../../judgment";
 import {
 	buildManagedKernelEnv,
 	buildManagedKernelEnvPatch,
@@ -39,7 +38,12 @@ import {
 	type PythonPreludeSource,
 } from "./kernel";
 import { resolveExplicitPythonRuntime } from "./runtime";
-import { ensurePyToolBridge, registerPyToolBridge } from "./tool-bridge";
+import {
+	ensurePyToolBridge,
+	callSessionToolPromptOnAbort,
+	lookupPyToolBridgeEntryByRun,
+	registerPyToolBridge,
+} from "./tool-bridge";
 
 export type PythonKernelMode = "session" | "per-call";
 
@@ -128,12 +132,6 @@ export interface PythonExecutorOptions {
 	bridgeSessionId?: string;
 	/** @internal Bridge endpoint info, set by `executePython` before delegating. */
 	bridge?: { url: string; token: string };
-	/**
-	 * @internal Resolved native judge transport, set by `executePython`; handed
-	 * to the kernel per request (kept out of the subprocess environment) so
-	 * `judge`/`judge_batch` skip the bridge.
-	 */
-	judgeDirect?: NativeJudgeDescriptor;
 }
 
 export interface PythonKernelExecutor {
@@ -240,15 +238,27 @@ function createCancelledPythonResult(timedOut: boolean, timeoutMs?: number): Pyt
 
 async function startKernel(cwd: string, options: PythonExecutorOptions): Promise<PythonKernel> {
 	requireRemainingTimeoutMs(options.deadlineMs);
-	return await PythonKernel.start({
+	const kernel = await PythonKernel.start({
 		cwd,
-		// The key-bearing judge transport rides the per-request env patch, not
-		// the subprocess environment.
-		env: buildManagedKernelEnv(options, { omitDirectTransports: true }),
+		env: buildManagedKernelEnv(options),
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
 		interpreter: options.interpreter,
 	});
+	// Judge (and other host-mediated) requests ride the runner's stdio control
+	// channel, so the provider credential stays in the host process and never
+	// enters the kernel.
+	kernel.setHostRequestHandler(async frame => {
+		const runId = typeof frame.run === "string" ? frame.run : "";
+		const entry = lookupPyToolBridgeEntryByRun(runId);
+		if (!entry) {
+			throw new Error(
+				`${String(frame.name ?? "host request")} has no active eval tool session (run ${runId || "unknown"})`,
+			);
+		}
+		return await callSessionToolPromptOnAbort(String(frame.name ?? ""), frame.args, entry);
+	});
+	return kernel;
 }
 
 async function replaceSessionKernel(
@@ -394,9 +404,8 @@ async function ensureKernelAvailable(cwd: string, options: PythonExecutorOptions
 }
 
 /**
- * `PI_NO_TOOL_BRIDGE=1` skips the bridge entirely; host-mediated helpers then
- * fail fast with the typed missing-env error. `judge`/`judge_batch` keep
- * working through `PI_JUDGE_DIRECT`.
+ * `PI_NO_TOOL_BRIDGE=1` skips the HTTP bridge entirely; host-mediated helpers
+ * then run over the runner's stdio host-request channel instead.
  */
 function toolBridgeDisabled(): boolean {
 	const raw = Bun.env.PI_NO_TOOL_BRIDGE?.trim().toLowerCase();
@@ -409,27 +418,6 @@ async function ensureToolBridge(options: PythonExecutorOptions): Promise<void> {
 		options.bridge = await ensurePyToolBridge();
 	} catch (err) {
 		logger.warn("Failed to start Python tool bridge", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
-}
-
-/**
- * Resolve the judge role's primary native candidate once per execution. Left
- * unset when the session has no model registry or the chain does not lead with
- * a native judge (those keep host-side fallbacks over the bridge).
- */
-async function ensureDirectJudge(options: PythonExecutorOptions): Promise<void> {
-	const session = options.toolSession;
-	if (!session || !session.modelRegistry || options.judgeDirect) return;
-	try {
-		options.judgeDirect = await resolveNativeJudgeDescriptor({
-			settings: session.settings,
-			registry: session.modelRegistry,
-			sessionId: session.getSessionId?.() ?? undefined,
-		});
-	} catch (err) {
-		logger.warn("Failed to resolve direct judge transport", {
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
@@ -635,7 +623,6 @@ export async function executePython(code: string, options?: PythonExecutorOption
 		}
 		await ensureKernelAvailable(cwd, executionOptions);
 		await ensureToolBridge(executionOptions);
-		await ensureDirectJudge(executionOptions);
 
 		const kernelMode = executionOptions.kernelMode ?? "session";
 		if (kernelMode === "per-call") {
