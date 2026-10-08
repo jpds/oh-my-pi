@@ -248,3 +248,29 @@ describe("python workpool model selection", () => {
 		}
 	});
 });
+
+describe("python tool bridge errors", () => {
+	it("surfaces a typed error when the bridge endpoint is unreachable", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				"    try:",
+				'        await tool.read({"path": "packages/package.json"})',
+				'        print("NO ERROR (BAD)")',
+				"    except RuntimeError as exc:",
+				"        print(str(exc))",
+				"asyncio.run(main())",
+			].join("\n"),
+			{
+				PI_TOOL_BRIDGE_URL: "http://127.0.0.1:1",
+				PI_TOOL_BRIDGE_TOKEN: "test-token",
+				PI_TOOL_BRIDGE_SESSION: "test-session",
+			},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("eval tool bridge unreachable at http://127.0.0.1:1");
+		expect(result.stdout).toContain("'test-session'");
+		expect(result.stdout).not.toContain("Traceback");
+	});
+});
