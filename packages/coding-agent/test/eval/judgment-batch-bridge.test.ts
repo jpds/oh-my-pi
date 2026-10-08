@@ -279,10 +279,12 @@ describe("judge_batch bridge", () => {
 			model: "p/smol",
 		});
 		expect(final.error).toBeUndefined();
+		// results() mirrors drain()'s item shape for every settled item, failures included.
 		expect(await runEvalJudgmentBatch({ op: "results", id: created.id }, { session })).toEqual({
 			results: {
-				"0": { tests: { type: "bool", bool: 1 } },
-				"2": { tests: { type: "bool", bool: 0 } },
+				"0": { key: 0, answers: { tests: { type: "bool", bool: 1 } }, model: "p/smol" },
+				"1": { key: 1, error: expect.stringContaining('judgment "tests"') },
+				"2": { key: 2, answers: { tests: { type: "bool", bool: 0 } }, model: "p/smol" },
 			},
 		});
 		const failed = (await runEvalJudgmentBatch({ op: "failed", id: created.id }, { session })) as {
@@ -393,12 +395,17 @@ describe("judgeBatch() JS prelude", () => {
 			{ items: [{ key: "b", error: "boom" }] },
 			{ items: [] },
 		];
+		const results = {
+			a: { key: "a", answers: { ok: { type: "bool", bool: 1 } }, model: "p/smol" },
+			b: { key: "b", error: "boom" },
+		};
 		const sandbox: Record<string, unknown> = {
 			__omp_call_tool__: async (name: string, args: Record<string, unknown>) => {
 				calls.push({ name, args });
 				if (name !== "__judge_batch__") throw new Error(`unexpected bridge call ${name}`);
 				if (args.op === "create") return { id: "jdgb-1", total: 2 };
 				if (args.op === "drain") return drains.shift();
+				if (args.op === "results") return { results };
 				if (args.op === "status") return { id: "jdgb-1", done: 2, total: 2, failed: 1, running: false };
 				throw new Error(`unexpected op ${String(args.op)}`);
 			},
@@ -411,7 +418,8 @@ describe("judgeBatch() JS prelude", () => {
 				const b = await judgeBatch({ a: "first", b: "second" }, { ok: { type: "bool", instructions: "?" } }, { concurrency: 4 });
 				const out = [];
 				for await (const [key, item] of b.drainIter({ timeout: 30 })) out.push([key, item.ok, item.answers ?? item.error]);
-				return { id: b.id, total: b.total, out, status: await b.status() };
+				const settled = await b.results();
+				return { id: b.id, total: b.total, out, settled, status: await b.status() };
 			})()`,
 			sandbox,
 		);
@@ -423,6 +431,7 @@ describe("judgeBatch() JS prelude", () => {
 				["a", true, { ok: { type: "bool", bool: 1 } }],
 				["b", false, "boom"],
 			],
+			settled: results,
 			status: { id: "jdgb-1", done: 2, total: 2, failed: 1, running: false },
 		});
 		expect(calls[0]?.args).toEqual({
@@ -453,18 +462,24 @@ async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<Python
 	const cellOne = [
 		"import json",
 		'Q = {"tests": {"type": "bool", "instructions": "Does the request mention tests?"}}',
-		'b = judge_batch({"a": "add tests please", "b": "rename a local"}, Q, intent="Classifying: Test idiomacy")',
+		'b = await judge_batch({"a": "add tests please", "b": "rename a local"}, Q, intent="Classifying: Test idiomacy")',
 		"first = await b.drain(timeout=30)",
 		"second = await b.drain(timeout=30)",
 		"items = sorted(first + second, key=lambda kv: kv[0])",
 		"single = await judge('write tests', Q)",
-		'print(json.dumps({"id": b.id, "total": b.total, "items": [[k, i.ok, i.answers or i.error] for k, i in items], "single": single}))',
+		"listanswers = await judge('write tests', [{'id': 'tests', 'type': 'bool', 'instructions': 'Does the request mention tests?'}])",
+		"qerr = None",
+		"try:",
+		"    await judge('x', 'nope')",
+		"except TypeError as exc:",
+		"    qerr = str(exc)",
+		'print(json.dumps({"id": b.id, "total": b.total, "items": [[k, i.ok, i.answers or i.error] for k, i in items], "single": single, "listanswers": listanswers, "qerr": qerr}))',
 	].join("\n");
 	const cellTwo = [
 		"import json",
 		"again = judge_batch.attach(b.id)",
 		"rest = await again.drain(timeout=0)",
-		'print(json.dumps({"rest": rest, "status": again.status()["done"], "results": sorted(again.results())}))',
+		'print(json.dumps({"rest": rest, "status": again.status()["done"], "results": again.results(), "failed": again.failed(), "dumped": json.dumps(rest)}))',
 		"again.close()",
 	].join("\n");
 	await Bun.write(
@@ -534,9 +549,22 @@ describe("judge_batch() Python prelude", () => {
 					["b", true, { tests: { type: "bool", bool: 0 } }],
 				],
 				single: { tests: { type: "bool", bool: 1 } },
+				listanswers: { tests: { type: "bool", bool: 1 } },
+				qerr: expect.stringContaining(
+					'judge questions must be a dict keyed by id ({q_best: {...}}) or a list of {"id": ...',
+				),
 			});
 			expect(String(one.id)).toMatch(/^jdgb-/);
-			expect(two).toEqual({ rest: [], status: 2, results: ["a", "b"] });
+			expect(two).toEqual({
+				rest: [],
+				status: 2,
+				results: {
+					a: { key: "a", answers: { tests: { type: "bool", bool: 1 } }, error: null, model: "p/smol" },
+					b: { key: "b", answers: { tests: { type: "bool", bool: 0 } }, error: null, model: "p/smol" },
+				},
+				failed: {},
+				dumped: "[]",
+			});
 		} finally {
 			tempDir.removeSync();
 		}
