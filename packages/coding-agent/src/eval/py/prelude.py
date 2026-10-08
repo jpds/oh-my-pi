@@ -4,7 +4,7 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import asyncio, collections.abc, contextvars, inspect, os, json, math, re, threading, time, types, typing, uuid
+    import asyncio, collections.abc, contextvars, inspect, os, json, math, re, threading, time, types, typing
     from urllib.parse import unquote
 
 
@@ -371,18 +371,26 @@ if "__omp_prelude_loaded__" not in globals():
 
         return current
 
-    def _tool_proxy_from_env(helper: str | None = None) -> tuple[str, str, str]:
+    def _tool_proxy_from_env() -> tuple[str, str, str] | None:
+        """HTTP tool-bridge coordinates, or None when the host did not provide one."""
         base = os.environ.get("PI_TOOL_BRIDGE_URL")
         token = os.environ.get("PI_TOOL_BRIDGE_TOKEN")
         session = os.environ.get("PI_TOOL_BRIDGE_SESSION")
         if not base or not token or not session:
-            raise RuntimeError(
-                f"{helper or 'host-mediated helpers'} cannot run: no host tool bridge in this kernel "
-                "(no PI_TOOL_BRIDGE_URL; the bridge may be disabled via PI_NO_TOOL_BRIDGE=1 "
-                "or no tool session is attached to this kernel). "
-                "judge()/judge_batch() keep working when a native judge is configured."
-            )
+            return None
         return (base.rstrip("/"), token, session)
+
+    def _host_channel():
+        """Runner-injected stdio host-request channel, when a runner hosts this kernel."""
+        channel = globals().get("__omp_host_bridge__")
+        return channel if callable(channel) else None
+
+    def _bridge_unavailable(helper: str | None) -> RuntimeError:
+        return RuntimeError(
+            f"{helper or 'host-mediated helpers'} cannot run: no host tool bridge in this kernel "
+            "(no PI_TOOL_BRIDGE_URL; the bridge may be disabled via PI_NO_TOOL_BRIDGE=1 "
+            "or no tool session is attached to this kernel) and no runner host-request channel."
+        )
 
     import urllib.error, urllib.request
 
@@ -427,8 +435,14 @@ if "__omp_prelude_loaded__" not in globals():
             self.session = session
 
     def _bridge_call(name: str, args: dict, helper: str | None = None):
-        """POST one request to the host tool bridge and return its `value`."""
-        base, token, session = _tool_proxy_from_env(helper)
+        """Run one host-mediated helper call: HTTP tool bridge first, else the runner's stdio channel."""
+        target = _tool_proxy_from_env()
+        if target is None:
+            channel = _host_channel()
+            if channel is None:
+                raise _bridge_unavailable(helper)
+            return channel(name, args)
+        base, token, session = target
         _run_id_getter = globals().get("__omp_current_run_id__")
         _run_id = (
             _run_id_getter()
@@ -864,194 +878,11 @@ if "__omp_prelude_loaded__" not in globals():
             raise RuntimeError("completion() did not return a handle")
         return CompletionHandle(result["id"], schema)
 
-    # --- direct judgment (PI_JUDGE_DIRECT; no host bridge) -----------------
-    #
-    # Host injects the resolved native judge transport per request; the runner
-    # keeps it out of `os.environ` (so cell code cannot `os.environ` the key
-    # and child processes never inherit it) and hands it to the prelude through
-    # the runner-injected `__omp_judge_direct__()` accessor. Standalone prelude
-    # consumers without a runner still read the `PI_JUDGE_DIRECT` env var.
-    # Without a descriptor they fall back to the host bridge, preserving
-    # judge-role chains with non-native candidates.
-
-    _JUDGE_MAX_ATTEMPTS = 3
-    _JUDGE_BACKOFF_BASE_S = 0.5
-    _JUDGE_BACKOFF_MAX_S = 5.0
-    _JUDGE_TIMEOUT_S = 10.0
-    _JUDGE_BATCH_CONCURRENCY = 32
-    _JUDGE_BATCH_DEFAULT_RETRIES = 1
-    _JUDGE_BATCH_DRAIN_COALESCE_S = 0.1
-
-    _JUDGE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-    def _judge_direct_descriptor() -> dict | None:
-        """Resolved native judge transport (runner-held `__omp_judge_direct__()` or PI_JUDGE_DIRECT env), or None."""
-        accessor = globals().get("__omp_judge_direct__")
-        raw = accessor() if callable(accessor) else os.environ.get("PI_JUDGE_DIRECT")
-        if not raw:
-            return None
-        if isinstance(raw, dict):
-            return raw
-        try:
-            descriptor = json.loads(raw)
-        except json.JSONDecodeError:
-            raise RuntimeError("PI_JUDGE_DIRECT is not valid JSON") from None
-        if not isinstance(descriptor, dict):
-            raise RuntimeError("PI_JUDGE_DIRECT must be a JSON object")
-        return descriptor
-
     def _judge_invalid(detail: str) -> TypeError:
         return TypeError(f"judge() received invalid arguments: {detail}")
 
-    def _judge_check_state(state) -> None:
-        if isinstance(state, str):
-            if not state:
-                raise _judge_invalid("state must not be empty")
-            return
-        if isinstance(state, (dict, list)):
-            try:
-                json.dumps(state)
-            except (TypeError, ValueError):
-                raise _judge_invalid("state must be JSON-serializable") from None
-            return
-        raise _judge_invalid("state must be a string, a JSON object, or a JSON array")
-
-    def _judge_wire_question(id, value) -> dict:
-        """Cell question → System One wire question (`bool` maps to `noul`)."""
-        if not isinstance(value, dict):
-            raise _judge_invalid(f'question "{id}" must be an object')
-        instructions = value.get("instructions")
-        if not isinstance(instructions, str) or not instructions:
-            raise _judge_invalid(f'question "{id}" needs non-empty string instructions')
-        qtype = value.get("type")
-        if qtype == "bool":
-            criteria = value.get("criteria")
-            if criteria is None:
-                return {"type": "noul", "instructions": instructions}
-            if not isinstance(criteria, dict):
-                raise _judge_invalid(f'bool question "{id}" criteria must be {{ true?: str, false?: str }}')
-            wire_criteria = {}
-            for side in ("true", "false"):
-                if side not in criteria:
-                    continue
-                description = criteria[side]
-                if not isinstance(description, str):
-                    raise _judge_invalid(f'bool question "{id}" criteria.{side} must be a string')
-                wire_criteria[side] = description
-            return {"type": "noul", "instructions": instructions, "criteria": wire_criteria}
-        if qtype == "choice":
-            criteria = value.get("criteria")
-            if not isinstance(criteria, dict):
-                raise _judge_invalid(f'choice question "{id}" needs criteria: {{ label: rubric | None }}')
-            wire_criteria = {}
-            for label, rubric in criteria.items():
-                if rubric is not None and not isinstance(rubric, str):
-                    raise _judge_invalid(f'choice question "{id}" criteria "{label}" must be a string or None')
-                wire_criteria[label] = rubric
-            if len(wire_criteria) < 2:
-                # Provider 422s these shapes opaquely ("Endpoint is unavailable.");
-                # validate the same contract client-side.
-                raise _judge_invalid(f'choice question "{id}" needs at least two options')
-            return {"type": "choice", "instructions": instructions, "criteria": wire_criteria}
-        if qtype == "score":
-            levels = value.get("criteria")
-            if not isinstance(levels, list) or not all(isinstance(level, str) for level in levels):
-                raise _judge_invalid(f'score question "{id}" needs criteria: [lowest, ..., highest] level descriptions')
-            if len(levels) < 2:
-                raise _judge_invalid(f'score question "{id}" needs at least two levels')
-            return {"type": "score", "instructions": instructions, "criteria": levels}
-        raise _judge_invalid(f'question "{id}" type must be "choice", "bool", or "score"')
-
-    def _judge_wire_questions(questions) -> dict:
-        if not isinstance(questions, dict):
-            raise _judge_invalid("questions must be an object keyed by id")
-        wire = {id: _judge_wire_question(id, value) for id, value in questions.items()}
-        if not wire:
-            raise _judge_invalid("questions must contain at least one question")
-        return wire
-
-    def _judge_retry_after_s(headers) -> float | None:
-        value = headers.get("Retry-After") if headers is not None else None
-        if value is None:
-            return None
-        try:
-            return max(0.0, float(value))
-        except ValueError:
-            return None
-
-    def _judge_backoff_s(attempt: int, retry_after_s: float | None) -> float:
-        if retry_after_s is not None:
-            return min(retry_after_s, _JUDGE_BACKOFF_MAX_S)
-        return min(_JUDGE_BACKOFF_BASE_S * (2**attempt), _JUDGE_BACKOFF_MAX_S)
-
-    def _http_post_retry(url: str, headers: dict, body: dict, label: str, timeout_s: float) -> dict:
-        """POST one JSON request; retries transient failures (408/429/5xx, network)."""
-        data = json.dumps(body).encode("utf-8")
-        for attempt in range(_JUDGE_MAX_ATTEMPTS):
-            req = urllib.request.Request(url, data=data, method="POST", headers=headers)
-            try:
-                with _JUDGE_OPENER.open(req, timeout=timeout_s) as resp:
-                    return json.loads(resp.read())
-            except urllib.error.HTTPError as exc:
-                detail = exc.read()
-                status = exc.code
-                transient = status == 408 or status == 429 or status >= 500
-                error = RuntimeError(f"{label} API error ({status}): {detail[:300]!r}")
-                if not transient or attempt + 1 >= _JUDGE_MAX_ATTEMPTS:
-                    raise error from None
-                time.sleep(_judge_backoff_s(attempt, _judge_retry_after_s(exc.headers)))
-            except (urllib.error.URLError, TimeoutError) as exc:
-                if attempt + 1 >= _JUDGE_MAX_ATTEMPTS:
-                    raise RuntimeError(
-                        f"{label} transport {url} failed after {_JUDGE_MAX_ATTEMPTS} attempts: {exc}"
-                    ) from exc
-                time.sleep(_judge_backoff_s(attempt, None))
-        raise RuntimeError("unreachable")
-
-    def _systemone_post(descriptor: dict, body: dict) -> dict:
-        """POST one System One judgment request to the native judge transport."""
-        url = descriptor["baseUrl"].rstrip("/") + descriptor["route"]
-        label = f"{descriptor.get('provider', 'typesafe')}/{descriptor.get('model')}"
-        headers = {
-            "Authorization": f"Bearer {descriptor['apiKey']}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        headers.update(descriptor.get("headers") or {})
-        return _http_post_retry(url, headers, body, label, _JUDGE_TIMEOUT_S)
-
-    def _judge_shape_answers(descriptor: dict, wire_questions: dict, response) -> tuple[dict, str]:
-        if not isinstance(response, dict) or not isinstance(response.get("answers"), dict):
-            raise RuntimeError("judge transport returned an invalid response (missing answers)")
-        answers = {}
-        for id, question in wire_questions.items():
-            answer = response["answers"].get(id)
-            if not isinstance(answer, dict) or answer.get("type") != question["type"]:
-                raise RuntimeError(
-                    f"judge response is missing a \"{question['type']}\" answer for question \"{id}\""
-                )
-            answers[id] = {"type": "bool", "bool": answer.get("noul")} if answer["type"] == "noul" else answer
-        model = response.get("model") or descriptor.get("model")
-        return answers, f"{descriptor.get('provider', 'typesafe')}/{model}"
-
-    def _judge_once(descriptor: dict, state, wire_questions: dict) -> tuple[dict, str]:
-        response = _systemone_post(
-            descriptor,
-            {"state": state, "model": descriptor.get("model"), "questions": wire_questions},
-        )
-        return _judge_shape_answers(descriptor, wire_questions, response)
-
-    def _judge_count(value, name, fallback, maximum=None):
-        if value is None:
-            return fallback
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            raise TypeError(f"judge_batch() received invalid arguments: {name} must be a non-negative integer")
-        if maximum is not None:
-            return min(value, maximum)
-        return value
-
     class _BridgeBatch:
-        """Operates a host-owned judgment run through the tool bridge."""
+        """Operates a host-owned judgment run over the kernel→host channel."""
 
         __slots__ = ("id",)
 
@@ -1085,193 +916,6 @@ if "__omp_prelude_loaded__" not in globals():
 
         def close(self):
             self._call("close")
-
-    _JUDGE_BATCHES: dict = {}
-
-    class _LocalBatchRun:
-        """Kernel-owned bulk judgment run (mirrors the host-side `JudgmentBatch`).
-
-        Kernel-scoped, not a host job: `wait`, completion auto-delivery, and
-        `agent://` addressing don't see it; `drain` is the only observation
-        surface, and attach re-creates refs only within this kernel. Item
-        failures are recorded per key, never raised; `drain` raises only on
-        wholesale death (`min_ok` unmet, cancelled).
-        """
-
-        __slots__ = (
-            "id", "total", "_descriptor", "_items", "_questions", "_concurrency", "_retries",
-            "_min_ok", "_intent", "_lock", "_wake", "_settled", "_cursor", "_failed", "_running",
-            "_cancelled", "_error", "_next", "_model", "_started",
-        )
-
-        def __init__(self, id, descriptor, items, questions, concurrency, retries, min_ok, intent):
-            self.id = id
-            self.total = len(items)
-            self._descriptor = descriptor
-            self._items = items
-            self._questions = questions
-            self._concurrency = concurrency
-            self._retries = retries
-            self._min_ok = min_ok
-            self._intent = intent
-            self._lock = threading.Lock()
-            self._wake = threading.Condition(self._lock)
-            self._settled = []
-            self._cursor = 0
-            self._failed = 0
-            self._running = True
-            self._cancelled = False
-            self._error = None
-            self._next = 0
-            self._model = None
-            self._started = time.monotonic()
-
-        def start(self):
-            for _ in range(max(1, min(self._concurrency, self.total))):
-                threading.Thread(target=self._worker, daemon=True).start()
-
-        def _worker(self):
-            while True:
-                with self._lock:
-                    if self._next >= self.total:
-                        return
-                    index = self._next
-                    self._next += 1
-                if self._cancelled:
-                    self._settle({"key": self._items[index]["key"], "error": "cancelled"})
-                else:
-                    self._settle(self._judge_item(self._items[index]))
-
-        def _judge_item(self, item):
-            last = None
-            for _ in range(self._retries + 1):
-                if self._cancelled:
-                    return {"key": item["key"], "error": "cancelled"}
-                try:
-                    answers, model = _judge_once(self._descriptor, item["state"], self._questions)
-                    return {"key": item["key"], "answers": answers, "model": model}
-                except Exception as exc:
-                    last = exc
-            return {"key": item["key"], "error": str(last)}
-
-        def _settle(self, result):
-            with self._wake:
-                self._settled.append(result)
-                if result.get("error") is not None:
-                    self._failed += 1
-                if result.get("model"):
-                    self._model = result["model"]
-                if len(self._settled) >= self.total:
-                    self._running = False
-                    # Drop the transport (it carries the API key) once every
-                    # item has settled: nothing judges again, and the registry
-                    # entry keeps attach-after-completion working without
-                    # retaining secrets.
-                    self._descriptor = None
-                    if self._cancelled:
-                        self._error = "judge_batch cancelled"
-                    elif self.total - self._failed < self._min_ok:
-                        self._error = (
-                            f"judge_batch: only {self.total - self._failed}/{self.total} item(s) judged "
-                            f"(min_ok={self._min_ok}); last error: {self._last_error() or 'unknown'}"
-                        )
-                self._wake.notify_all()
-
-        def _last_error(self):
-            for entry in reversed(self._settled):
-                error = entry.get("error")
-                if error is not None and error != "cancelled":
-                    return error
-            return None
-
-        def status(self):
-            with self._lock:
-                snapshot = {
-                    "id": self.id,
-                    "intent": self._intent,
-                    "total": self.total,
-                    "done": len(self._settled),
-                    "failed": self._failed,
-                    # Not priced: kernel has no catalog costs; usage lands on the provider account.
-                    "cost": 0.0,
-                    "running": self._running,
-                    "elapsedS": round((time.monotonic() - self._started) * 10) / 10,
-                }
-                if self._model is not None:
-                    snapshot["model"] = self._model
-                if self._error is not None:
-                    snapshot["error"] = self._error
-                return snapshot
-
-        def drain_items(self, timeout_s):
-            with self._wake:
-                if self._cursor >= len(self._settled) and self._running:
-                    deadline = None if timeout_s is None else time.monotonic() + timeout_s
-                    while self._cursor >= len(self._settled) and self._running:
-                        if deadline is None:
-                            self._wake.wait()
-                        else:
-                            remaining = deadline - time.monotonic()
-                            if remaining <= 0:
-                                break
-                            self._wake.wait(remaining)
-                    if self._cursor < len(self._settled) and self._running:
-                        # Hold briefly (never past the deadline) so near-simultaneous
-                        # settles return together.
-                        linger = (
-                            _JUDGE_BATCH_DRAIN_COALESCE_S
-                            if deadline is None
-                            else min(_JUDGE_BATCH_DRAIN_COALESCE_S, deadline - time.monotonic())
-                        )
-                        if linger > 0:
-                            self._wake.wait(linger)
-                if self._cursor < len(self._settled):
-                    items = self._settled[self._cursor :]
-                    self._cursor = len(self._settled)
-                    return items
-                if not self._running and self._error is not None:
-                    raise RuntimeError(self._error)
-                return []
-
-        def results(self):
-            with self._lock:
-                return {str(e["key"]): e for e in self._settled}
-
-        def failed(self):
-            with self._lock:
-                return {str(e["key"]): e["error"] for e in self._settled if e.get("error") is not None}
-
-        def cancel(self):
-            with self._lock:
-                if not self._running or self._cancelled:
-                    return False
-                self._cancelled = True
-                self._wake.notify_all()
-                return True
-
-        def close(self):
-            self.cancel()
-            _JUDGE_BATCHES.pop(self.id, None)
-
-    def _start_local_batch(descriptor, items, questions, concurrency, retries, min_ok, intent):
-        run = _LocalBatchRun(
-            id=f"jdgb-{uuid.uuid4().hex}",
-            descriptor=descriptor,
-            items=items,
-            questions=questions,
-            concurrency=(
-                _JUDGE_BATCH_CONCURRENCY
-                if concurrency is None
-                else _judge_count(concurrency, "concurrency", _JUDGE_BATCH_CONCURRENCY, _JUDGE_BATCH_CONCURRENCY)
-                or _JUDGE_BATCH_CONCURRENCY
-            ),
-            retries=_judge_count(retries, "retries", _JUDGE_BATCH_DEFAULT_RETRIES),
-            min_ok=_judge_count(min_ok, "minOk", 1, len(items)),
-            intent=intent or "Judging",
-        )
-        _JUDGE_BATCHES[run.id] = run
-        run.start()
-        return run
 
     def _judge_questions(questions):
         """Validate and normalize ``questions``: a dict keyed by id, or a list of ``{"id", ...question}`` entries.
@@ -1307,14 +951,8 @@ if "__omp_prelude_loaded__" not in globals():
     async def judge(state, questions):
         """Answer typed questions over one ``state``; returns ``{id: answer}`` (choice/bool/score)."""
         questions = _judge_questions(questions)
-        descriptor = _judge_direct_descriptor()
-        if descriptor is not None:
-            wire_questions = _judge_wire_questions(questions)
-            _judge_check_state(state)
-            answers, _model = await asyncio.to_thread(_judge_once, descriptor, state, wire_questions)
-            return answers
         result = await asyncio.to_thread(
-            _bridge_call, "__judge__", {"state": state, "questions": questions}, "judge() (bridge fallback)"
+            _bridge_call, "__judge__", {"state": state, "questions": questions}, "judge()"
         )
         if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
             raise RuntimeError("judge() did not return answers")
@@ -1354,10 +992,10 @@ if "__omp_prelude_loaded__" not in globals():
     class JudgmentBatch:
         """Bulk judgment run. Pull settled items with ``await drain()`` across as many cells as needed.
 
-        ``judge_batch()`` returns synchronously (host-owned on the bridge path;
-        kernel-scoped under a native judge), but the batch is awaitable and
-        resolves to itself, so ``await judge_batch(...)`` and
-        ``judge_batch(...)`` are interchangeable.
+        ``judge_batch()`` returns synchronously (the run is owned by the host,
+        outliving this cell), but the batch is awaitable and resolves to
+        itself, so ``await judge_batch(...)`` and ``judge_batch(...)`` are
+        interchangeable.
         """
 
         __slots__ = ("id", "total", "intent", "_backend")
@@ -1436,13 +1074,14 @@ if "__omp_prelude_loaded__" not in globals():
     ):
         """Judge every state with the same ``questions``; returns a ``JudgmentBatch`` to drain across cells.
 
-        ``states`` is ``{key: state}`` or a list (keys are indices). ``intent`` is an
-        optional nonempty progress/job label. Host-owned when judging goes through
-        the tool bridge; under a native judge the run is kernel-scoped (no host
-        job: no auto-delivery, ``b.id`` only attaches within this kernel). The
-        batch is awaitable and resolves to itself, so ``await judge_batch(...)``
-        also works. Item failures land in ``JudgmentItem.error``; only a run
-        that dies wholesale raises from ``drain()``.
+        ``states`` is ``{key: state}`` or a list (keys are stringified indices).
+        ``intent`` is an optional nonempty progress/job label. The run is
+        host-owned, so it outlives this cell and ``b.id`` re-attaches from any
+        cell in this session. The batch is awaitable and resolves to itself, so
+        ``await judge_batch(...)`` also works. Item failures land in
+        ``JudgmentItem.error``; only a run that dies wholesale (fewer than
+        ``min_ok`` judged) raises from ``drain()``, and ``cancel()`` stops
+        further dispatch rather than aborting items already in flight.
         """
         questions = _judge_questions(questions)
         if intent is not None and (
@@ -1450,18 +1089,15 @@ if "__omp_prelude_loaded__" not in globals():
         ):
             raise TypeError("judge_batch() intent must be a non-empty string")
         if isinstance(states, dict):
-            items = [{"key": key, "state": state} for key, state in states.items()]
+            # Keys are strings everywhere so drain() tuples, item["key"], and
+            # results()/failed() dict keys agree.
+            items = [{"key": str(key), "state": state} for key, state in states.items()]
         elif isinstance(states, (list, tuple)):
-            items = [{"key": index, "state": state} for index, state in enumerate(states)]
+            items = [{"key": str(index), "state": state} for index, state in enumerate(states)]
         else:
             raise TypeError("judge_batch(states, questions) expects states as a dict or list")
         if not items:
             raise TypeError("judge_batch() received invalid arguments: items must not be empty")
-        descriptor = _judge_direct_descriptor()
-        if descriptor is not None:
-            wire_questions = _judge_wire_questions(questions)
-            run = _start_local_batch(descriptor, items, wire_questions, concurrency, retries, min_ok, intent)
-            return JudgmentBatch(run, run.total, run._intent)
         args = {"op": "create", "items": items, "questions": questions}
         if concurrency is not None:
             args["concurrency"] = int(concurrency)
@@ -1471,13 +1107,10 @@ if "__omp_prelude_loaded__" not in globals():
             args["minOk"] = int(min_ok)
         if intent is not None:
             args["intent"] = intent
-        return _judge_batch_from(_bridge_call("__judge_batch__", args, helper="judge_batch() (bridge fallback)"))
+        return _judge_batch_from(_bridge_call("__judge_batch__", args, helper="judge_batch()"))
 
     def _attach_judge_batch(id):
-        """Re-create a ``JudgmentBatch`` ref by id (kernel-local run, or a host-owned run from another runtime)."""
-        run = _JUDGE_BATCHES.get(str(id))
-        if run is not None:
-            return JudgmentBatch(run, run.total, run._intent)
+        """Re-create a ``JudgmentBatch`` ref by id (the run is owned by the host)."""
         return _judge_batch_from(
             _bridge_call("__judge_batch__", {"op": "attach", "id": str(id)}, helper="judge_batch.attach()")
         )

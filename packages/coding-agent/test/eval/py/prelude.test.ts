@@ -186,211 +186,179 @@ describe("python prelude", () => {
 		}
 	});
 });
+describe("python host-mediated judgment (runner stdio channel)", () => {
+	// The runner injects `__omp_host_bridge__(name, args)`; a kernel with no
+	// HTTP tool bridge reaches every host-mediated helper through it. Stub it in
+	// the prelude's own namespace so the standalone script exercises the real
+	// dispatch path without a host process.
+	const CHANNEL_SETUP = [
+		"__omp_calls__ = []",
+		"__omp_settled__ = [",
+		'    {"key": "0", "answers": {"q": {"type": "bool", "bool": 1}}, "model": "typesafe/jev-preview"},',
+		'    {"key": "1", "answers": {"q": {"type": "bool", "bool": 0}}, "model": "typesafe/jev-preview"},',
+		"]",
+		"__omp_drains__ = [0]",
+		"def __omp_host_bridge__(name, args):",
+		"    __omp_calls__.append((name, args))",
+		'    if name == "__judge__":',
+		'        return {"answers": {"q": {"type": "bool", "bool": 1}}, "model": "typesafe/jev-preview"}',
+		'    if name == "__judge_batch__":',
+		'        op = args.get("op")',
+		'        if op in ("create", "attach"):',
+		'            return {"id": "jdgb-stub", "total": len(__omp_settled__), "intent": args.get("intent") or "Judging"}',
+		'        if op == "drain":',
+		"            seen = __omp_drains__[0]",
+		"            __omp_drains__[0] = seen + 1",
+		'            return {"items": __omp_settled__ if seen == 0 else []}',
+		'        if op == "results":',
+		'            return {"results": {item["key"]: item for item in __omp_settled__}}',
+		'        if op == "failed":',
+		'            return {"failed": {item["key"]: item["error"] for item in __omp_settled__ if item.get("error")}}',
+		'        if op == "status":',
+		'            return {"intent": "Judging", "done": 2, "total": 2, "failed": 0, "cost": 0.0004, "running": False}',
+		'        if op == "cancel":',
+		'            return {"cancelled": True}',
+		"        return {}",
+	].join("\n");
 
-describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
-	const DIRECT_ENV = (baseUrl: string): Record<string, string> => ({
-		PI_JUDGE_DIRECT: JSON.stringify({
-			api: "typesafe",
-			route: "/v1/systemone",
-			provider: "typesafe",
-			model: "jev-preview",
-			baseUrl,
-			apiKey: "ts-key",
-		}),
+	it("judge() forwards cell questions over the runner channel and returns the host answers", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				'    answers = await judge("hello", {"q": {"type": "bool", "instructions": "non-empty?"}})',
+				'    print(json.dumps({"answers": answers, "calls": __omp_calls__}, sort_keys=True))',
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			answers: { q: { type: "bool", bool: 1 } },
+			calls: [["__judge__", { state: "hello", questions: { q: { type: "bool", instructions: "non-empty?" } } }]],
+		});
 	});
 
-	it("judge() POSTs the System One wire format directly and surfaces bool answers", async () => {
-		const requests: { url: string; authorization: string; body: unknown }[] = [];
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: async request => {
-				requests.push({
-					url: new URL(request.url).pathname,
-					authorization: request.headers.get("authorization") ?? "",
-					body: await request.json(),
-				});
-				return Response.json({
-					model: "jev-preview",
-					answers: {
-						ok: { type: "noul", noul: 1 },
-						pick: { type: "choice", choice: "b", confidence: 0.9, probabilities: { a: 0.1, b: 0.9 } },
-					},
-					usage: { input_tokens: 5, output_tokens: 7 },
-				});
+	it("judge_batch() drives the host run over the runner channel and wraps its items", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				'    b = judge_batch(["one", "two"], {"q": {"type": "bool", "instructions": "non-empty?"}}, intent="Triage")',
+				"    drained = []",
+				"    while True:",
+				"        got = await b.drain(timeout=10)",
+				"        if not got:",
+				"            break",
+				"        drained += got",
+				"    print(json.dumps({",
+				'        "id": b.id,',
+				'        "drain_keys": [k for k, _ in drained],',
+				'        "item_keys": [item["key"] for _, item in drained],',
+				'        "ok": [item.ok for _, item in drained],',
+				'        "answers": [item.answers for _, item in drained],',
+				'        "results": sorted(b.results().keys()),',
+				'        "failed": b.failed(),',
+				'        "cost": b.status()["cost"],',
+				'        "attach": judge_batch.attach(b.id).id,',
+				'        "cancelled": b.cancel(),',
+				'        "ops": [args["op"] for _, args in __omp_calls__],',
+				'        "create_args": __omp_calls__[0][1],',
+				"    }, sort_keys=True))",
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			id: "jdgb-stub",
+			drain_keys: ["0", "1"],
+			item_keys: ["0", "1"],
+			ok: [true, true],
+			answers: [{ q: { type: "bool", bool: 1 } }, { q: { type: "bool", bool: 0 } }],
+			results: ["0", "1"],
+			failed: {},
+			cost: 0.0004,
+			attach: "jdgb-stub",
+			cancelled: true,
+			ops: ["create", "drain", "drain", "results", "failed", "status", "attach", "cancel"],
+			create_args: {
+				op: "create",
+				items: [
+					{ key: "0", state: "one" },
+					{ key: "1", state: "two" },
+				],
+				questions: { q: { type: "bool", instructions: "non-empty?" } },
+				intent: "Triage",
 			},
 		});
-
-		try {
-			const result = await runPrelude(
-				[
-					"async def main():",
-					'    answers = await judge("hello", {',
-					'        "ok": {"type": "bool", "instructions": "fake?", "criteria": {"true": "yes please", "false": "no"}},',
-					'        "pick": {"type": "choice", "instructions": "which?", "criteria": {"a": None, "b": "bee"}},',
-					"    })",
-					"    print(json.dumps(answers, sort_keys=True))",
-					"asyncio.run(main())",
-				].join("\n"),
-				DIRECT_ENV(server.url.toString()),
-			);
-
-			expect(result.stderr).toBe("");
-			expect(result.exitCode).toBe(0);
-			expect(JSON.parse(result.stdout.trim())).toEqual({
-				ok: { type: "bool", bool: 1 },
-				pick: { type: "choice", choice: "b", confidence: 0.9, probabilities: { a: 0.1, b: 0.9 } },
-			});
-			expect(requests).toEqual([
-				{
-					url: "/v1/systemone",
-					authorization: "Bearer ts-key",
-					body: {
-						state: "hello",
-						model: "jev-preview",
-						questions: {
-							ok: { type: "noul", instructions: "fake?", criteria: { true: "yes please", false: "no" } },
-							pick: { type: "choice", instructions: "which?", criteria: { a: null, b: "bee" } },
-						},
-					},
-				},
-			]);
-		} finally {
-			server.stop(true);
-		}
 	});
 
-	it("judge_batch() runs kernel-local with per-item retry, drain cursor, and attach", async () => {
-		const attempts: string[] = [];
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: async request => {
-				const body = (await request.json()) as { state?: string };
-				const state = body.state ?? "";
-				attempts.push(state);
-				// "world" never succeeds; "hello" succeeds on its second attempt.
-				if (state === "world") return new Response("boom", { status: 500 });
-				if (attempts.filter(attempt => attempt === "hello").length < 2) {
-					return new Response("flaky", { status: 500 });
-				}
-				return Response.json({
-					model: "jev-preview",
-					answers: { q: { type: "noul", noul: 1 } },
-					usage: { input_tokens: 1, output_tokens: 1 },
-				});
+	it("prefers the configured HTTP tool bridge over the runner channel", async () => {
+		// A configured bridge wins even when it is dead: the call fails with the
+		// typed bridge error instead of silently falling back to the channel.
+		const result = await runPrelude(
+			[
+				"async def main():",
+				"    try:",
+				'        await judge("hello", {"q": {"type": "bool", "instructions": "non-empty?"}})',
+				'        print("NO ERROR (BAD)")',
+				"    except RuntimeError as exc:",
+				"        print(json.dumps({",
+				'            "bridged": "eval tool bridge unreachable" in str(exc),',
+				'            "channel_calls": len(__omp_calls__),',
+				"        }, sort_keys=True))",
+				"asyncio.run(main())",
+			].join("\n"),
+			{
+				PI_TOOL_BRIDGE_URL: "http://127.0.0.1:1",
+				PI_TOOL_BRIDGE_TOKEN: "test-token",
+				PI_TOOL_BRIDGE_SESSION: "test-session",
 			},
-		});
+			CHANNEL_SETUP,
+		);
 
-		try {
-			const result = await runPrelude(
-				[
-					"async def main():",
-					'    b = judge_batch({"x": "hello", "y": "world"}, {"q": {"type": "bool", "instructions": "non-empty?"}}, retries=2)',
-					"    items = []",
-					"    while True:",
-					"        got = await b.drain(timeout=10)",
-					"        if not got:",
-					"            break",
-					"        items += got",
-					"    status = b.status()",
-					"    print(json.dumps({",
-					'        "ok_keys": sorted(k for k, item in items if item.ok),',
-					'        "failed_keys": sorted(b.failed().keys()),',
-					'        "results": b.results(),',
-					'        "done": status["done"],',
-					'        "failed": status["failed"],',
-					'        "total": status["total"],',
-					'        "model": status.get("model"),',
-					'        "attach_same": judge_batch.attach(b.id).id == b.id,',
-					'        "result_keys": sorted(b.results().keys()),',
-					'        "descriptor_dropped": [r._descriptor for r in _JUDGE_BATCHES.values()] == [None],',
-					"    }, sort_keys=True))",
-					"asyncio.run(main())",
-				].join("\n"),
-				DIRECT_ENV(server.url.toString()),
-			);
-
-			expect(result.stderr).toBe("");
-			expect(result.exitCode).toBe(0);
-			expect(attempts.filter(attempt => attempt === "hello").length).toBe(2);
-			expect(attempts.filter(attempt => attempt === "world").length).toBe(9);
-			const value = JSON.parse(result.stdout.trim());
-			expect(value).toEqual({
-				ok_keys: ["x"],
-				failed_keys: ["y"],
-				// results() returns the unified item shape ({key, answers, error, model}).
-				results: {
-					x: {
-						key: "x",
-						answers: { q: { type: "bool", bool: 1 } },
-						error: null,
-						model: "typesafe/jev-preview",
-					},
-					y: {
-						key: "y",
-						answers: null,
-						error: "typesafe/jev-preview API error (500): b'boom'",
-						model: null,
-					},
-				},
-				result_keys: ["x", "y"],
-				done: 2,
-				failed: 1,
-				total: 2,
-				model: "typesafe/jev-preview",
-				attach_same: true,
-				descriptor_dropped: true,
-			});
-		} finally {
-			server.stop(true);
-		}
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({ bridged: true, channel_calls: 0 });
 	});
 
-	it("judge_batch() raises from drain() when min_ok cannot be met", async () => {
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: () => new Response("down", { status: 503 }),
+	it("rejects malformed list-form questions before reaching the channel", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				"    errors = []",
+				"    for questions in (",
+				'        [{"type": "bool", "instructions": "x"}],',
+				'        [{"id": "a", "type": "bool", "instructions": "x"}, {"id": "a", "type": "bool", "instructions": "y"}],',
+				"        [],",
+				"    ):",
+				"        try:",
+				'            await judge("hello", questions)',
+				'            errors.append("no-error")',
+				"        except TypeError as exc:",
+				"            errors.append(str(exc))",
+				'    print(json.dumps({"errors": errors, "channel_calls": len(__omp_calls__)}, sort_keys=True))',
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			errors: [
+				'question entry 0 must carry a non-empty string "id" (or pass questions as a dict keyed by id)',
+				'duplicate question id "a"',
+				"judge() received invalid arguments: questions must contain at least one question",
+			],
+			channel_calls: 0,
 		});
-
-		try {
-			const result = await runPrelude(
-				[
-					"async def main():",
-					'    b = judge_batch({"x": "hello"}, {"q": {"type": "bool", "instructions": "non-empty?"}}, retries=0, min_ok=1)',
-					"    drained = []",
-					"    try:",
-					"        while True:",
-					"            drained += await b.drain(timeout=10)",
-					'        print("NO ERROR (BAD)")',
-					"    except RuntimeError as exc:",
-					'        print("RAISED:", len(drained) == 1 and "only 0/1 item(s) judged" in str(exc) and "min_ok=1" in str(exc))',
-					"    b.close()",
-					"    try:",
-					"        judge_batch.attach(b.id)",
-					'        print("ATTACH (BAD)")',
-					"    except RuntimeError as exc:",
-					'        print("ATTACH_GONE:", "eval tool bridge unreachable at" in str(exc))',
-					"asyncio.run(main())",
-				].join("\n"),
-				{
-					...DIRECT_ENV(server.url.toString()),
-					// Closed local run attaches via bridge; dead URL hits the typed error.
-					PI_TOOL_BRIDGE_URL: "http://127.0.0.1:1",
-					PI_TOOL_BRIDGE_TOKEN: "test-token",
-					PI_TOOL_BRIDGE_SESSION: "test-session",
-				},
-			);
-
-			expect(result.stderr).toBe("");
-			expect(result.exitCode).toBe(0);
-			const lines = result.stdout.trim().split("\n");
-			expect(lines[0]).toBe("RAISED: True");
-			expect(lines[1]).toBe("ATTACH_GONE: True");
-		} finally {
-			server.stop(true);
-		}
 	});
 
 	it("names the calling helper when a host-mediated helper lacks the bridge", async () => {
@@ -427,97 +395,34 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		expect(errors).toEqual(["tool.read(...)", "omp_find() prelude helper", "wait()", "completion()", "agent()"]);
 	});
 
-	it("judge() reads the descriptor through the runner accessor, not the environment", async () => {
-		// The runner hands the transport to the prelude out-of-band (`__omp_judge_direct__()`),
-		// so a cell scanning `os.environ` finds no key.
-		let requests = 0;
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: async request => {
-				requests++;
-				await request.json();
-				return Response.json({
-					model: "jev-preview",
-					answers: { q: { type: "noul", noul: 1 } },
-					usage: {},
-				});
-			},
+	it("judges over the channel with no credential in the kernel", async () => {
+		// The host holds the judge transport: the cell sees no PI_JUDGE_DIRECT
+		// and no descriptor-returning accessor, only the call-only channel.
+		const result = await runPrelude(
+			[
+				"import os as _os",
+				"async def main():",
+				'    answers = await judge("hello", {"q": {"type": "bool", "instructions": "non-empty?"}})',
+				"    print(json.dumps({",
+				'        "answers": answers,',
+				'        "judge_env": _os.environ.get("PI_JUDGE_DIRECT"),',
+				'        "accessor": "__omp_judge_direct__" in globals(),',
+				'        "channel": callable(globals().get("__omp_host_bridge__")),',
+				"    }, sort_keys=True))",
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			answers: { q: { type: "bool", bool: 1 } },
+			judge_env: null,
+			accessor: false,
+			channel: true,
 		});
-
-		try {
-			const descriptor = {
-				api: "typesafe",
-				route: "/v1/systemone",
-				provider: "typesafe",
-				model: "jev-preview",
-				baseUrl: server.url.toString(),
-				apiKey: "ts-key",
-			};
-			const result = await runPrelude(
-				[
-					"import os as _os",
-					"async def main():",
-					"    assert _os.environ.get('PI_JUDGE_DIRECT') is None",
-					'    answers = await judge("hello", {"q": {"type": "bool", "instructions": "non-empty?"}})',
-					"    print(json.dumps(answers, sort_keys=True))",
-					"asyncio.run(main())",
-				].join("\n"),
-				{},
-				"__omp_judge_direct__ = lambda: json.dumps(" + JSON.stringify(descriptor) + ")",
-			);
-
-			expect(result.stderr).toBe("");
-			expect(result.exitCode).toBe(0);
-			expect(JSON.parse(result.stdout.trim())).toEqual({ q: { type: "bool", bool: 1 } });
-			expect(requests).toBe(1);
-		} finally {
-			server.stop(true);
-		}
-	});
-
-	it("rejects judge() arguments client-side without touching the network", async () => {
-		let requests = 0;
-		const server = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: async request => {
-				requests++;
-				await request.json();
-				return Response.json({ model: "jev-1.13", answers: {}, usage: {} });
-			},
-		});
-
-		try {
-			const result = await runPrelude(
-				[
-					"async def main():",
-					"    errors = []",
-					'    for questions in ({"q": {"type": "choice", "instructions": "x", "criteria": {"only": None}}},',
-					'                      {"q": {"type": "score", "instructions": "x", "criteria": ["only-one"]}},',
-					'                      {"q": {"type": "nope", "instructions": "x"}}):',
-					"        try:",
-					'            await judge("hello", questions)',
-					'            errors.append("no-error")',
-					"        except TypeError as exc:",
-					'            errors.append(str(exc).split(": ")[1])',
-					"    print(json.dumps(errors))",
-					"asyncio.run(main())",
-				].join("\n"),
-				DIRECT_ENV(server.url.toString()),
-			);
-
-			expect(result.stderr).toBe("");
-			expect(result.exitCode).toBe(0);
-			expect(JSON.parse(result.stdout.trim())).toEqual([
-				'choice question "q" needs at least two options',
-				'score question "q" needs at least two levels',
-				'question "q" type must be "choice", "bool", or "score"',
-			]);
-			expect(requests).toBe(0);
-		} finally {
-			server.stop(true);
-		}
 	});
 
 	it("surfaces a typed error when the bridge endpoint is unreachable", async () => {

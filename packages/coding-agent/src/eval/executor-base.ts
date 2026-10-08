@@ -13,7 +13,6 @@ import type { JsStatusEvent } from "./js/shared/types";
 import type { KernelDisplayOutput } from "./py/display";
 import { registerPyToolBridge } from "./py/tool-bridge";
 import { getActiveEvalShadowCell } from "./speculation/runtime-context";
-import type { NativeJudgeDescriptor } from "../judgment";
 
 /**
  * Constructor for a language executor's cancellation error. Each backend
@@ -317,7 +316,6 @@ export const MANAGED_KERNEL_ENV_KEYS = [
 	"PI_TOOL_BRIDGE_URL",
 	"PI_TOOL_BRIDGE_TOKEN",
 	"PI_TOOL_BRIDGE_SESSION",
-	"PI_JUDGE_DIRECT",
 	"PI_EVAL_LOCAL_ROOTS",
 ] as const;
 
@@ -326,18 +324,10 @@ interface ManagedKernelEnvOptions {
 	artifactsDir?: string;
 	bridgeSessionId?: string;
 	bridge?: { url: string; token: string };
-	/** Resolved native judge transport; lets the kernel judge without the tool bridge. */
-	judgeDirect?: NativeJudgeDescriptor;
 	localRoots?: Record<string, string>;
 }
 interface ManagedKernelEnvPolicy {
 	sparse?: boolean;
-	/**
-	 * Spawn-env policy: the direct judge transport carries a provider API key
-	 * and must stay out of the kernel subprocess environment. The runner
-	 * receives it per request (env patch) and stashes it runner-side.
-	 */
-	omitDirectTransports?: boolean;
 }
 
 export function buildManagedKernelEnvPatch(options: ManagedKernelEnvOptions): Record<string, string | null>;
@@ -359,20 +349,15 @@ export function buildManagedKernelEnvPatch(
 			patch.PI_TOOL_BRIDGE_TOKEN = options.bridge.token;
 			patch.PI_TOOL_BRIDGE_SESSION = options.bridgeSessionId ?? "";
 		}
-		if (options.judgeDirect && !policy.omitDirectTransports)
-			patch.PI_JUDGE_DIRECT = JSON.stringify(options.judgeDirect);
 		if (localRoots) patch.PI_EVAL_LOCAL_ROOTS = JSON.stringify(localRoots);
 		return patch;
 	}
-	const judgeDirect =
-		options.judgeDirect && !policy?.omitDirectTransports ? JSON.stringify(options.judgeDirect) : null;
 	return {
 		PI_SESSION_FILE: options.sessionFile ?? null,
 		PI_ARTIFACTS_DIR: options.artifactsDir ?? null,
 		PI_TOOL_BRIDGE_URL: options.bridge?.url ?? null,
 		PI_TOOL_BRIDGE_TOKEN: options.bridge?.token ?? null,
 		PI_TOOL_BRIDGE_SESSION: options.bridge && options.bridgeSessionId ? options.bridgeSessionId : null,
-		PI_JUDGE_DIRECT: judgeDirect,
 		PI_EVAL_LOCAL_ROOTS: localRoots && Object.keys(localRoots).length > 0 ? JSON.stringify(localRoots) : null,
 	};
 }
@@ -511,19 +496,20 @@ export async function executeWithKernelBase<
 	// the cell open across a critical phase (isolation worktree setup,
 	// merge/cherry-pick) so a cancel can't settle it on top of a half-applied
 	// git operation.
-	const unregisterBridge =
-		options?.toolSession && options?.bridgeSessionId
-			? registerPyToolBridge(options.bridgeSessionId, runId, {
-					toolSession: options.toolSession,
-					signal: options.signal,
-					shieldedSignal: abortShield.signal,
-					emitStatus,
-					shadowCell: getActiveEvalShadowCell(),
-					abortRequested: () => {
-						return abortShield.abortRequested;
-					},
-				})
-			: null;
+	// Registered whenever a tool session exists: the HTTP bridge and the
+	// runner's stdio host-request channel both resolve the entry by run id.
+	const unregisterBridge = options?.toolSession
+		? registerPyToolBridge(options.bridgeSessionId ?? "", runId, {
+				toolSession: options.toolSession,
+				signal: options.signal,
+				shieldedSignal: abortShield.signal,
+				emitStatus,
+				shadowCell: getActiveEvalShadowCell(),
+				abortRequested: () => {
+					return abortShield.abortRequested;
+				},
+			})
+		: null;
 
 	try {
 		if (remainingMs !== undefined && remainingMs <= 0) {

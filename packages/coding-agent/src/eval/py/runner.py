@@ -8,6 +8,8 @@ Host -> wrapper:
   {"id": str, "code": str, "silent": bool?, "storeHistory": bool?, "cwd": str?, "filename": str?, "env": dict?}
   {"type": "tool", "id": str, "op": "describe", "names": [str]}
   {"type": "tool", "id": str, "op": "call", "name": str, "args": dict}
+  {"type": "host_response", "id": str, "value": any}  # answer to a runner host_request
+  {"type": "host_error", "id": str, "error": str}     # failure answer to a host_request
   {"type": "exit"}                                # graceful shutdown
 
 Wrapper -> host:
@@ -17,6 +19,7 @@ Wrapper -> host:
   {"type": "display",     "id": ..., "bundle": {<mime>: <value>}}
   {"type": "result",      "id": ..., "bundle": {<mime>: <value>}}
   {"type": "error",       "id": ..., "ename": str, "evalue": str, "traceback": [str]}
+  {"type": "host_request", "id": ..., "run": str, "name": str, "args": any}
   {"type": "done",        "id": ..., "status": "ok"|"error",
                               "executionCount": int, "cancelled": bool}
 
@@ -53,6 +56,7 @@ import threading
 import time
 import traceback
 import tokenize
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -195,12 +199,8 @@ class _RunnerState:
         self.active_executions: int = 0
         # Best-effort attribution target for captured fd-1 bytes (child
         # processes inheriting stdout). With overlapping requests the most
-        # recently started one wins — strictly better than dropping the bytes.
+        # recently started one wins - strictly better than dropping the bytes.
         self.capture_rid: str | None = None
-        # Resolved judge transport (PI_JUDGE_DIRECT), held out of
-        # `os.environ`: the key must not be readable by cell code's plain
-        # environment scans or inherited by processes cells spawn.
-        self.judge_direct: str | None = None
 
 
 _CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -215,6 +215,105 @@ _CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS: contextvars.ContextVar[set[int] | None
 
 
 _STATE = _RunnerState()
+
+
+# ---------------------------------------------------------------------------
+# Host request channel
+# ---------------------------------------------------------------------------
+#
+# Runner-initiated requests (host-mediated helpers when the HTTP tool bridge is
+# absent) are correlated by id over the same NDJSON control channel: the runner
+# emits `host_request` and the host answers with `host_response`/`host_error`.
+# The host resolves the run's tool session, so no credential or session handle
+# ever enters this process.
+_HOST_REQUESTS: dict[str, dict[str, Any]] = {}
+_HOST_REQUESTS_LOCK = threading.Lock()
+_HOST_REQUEST_TIMEOUT_S = 600.0
+# True once the POSIX stdin reader thread owns the control channel; Windows
+# serves requests serially and has no reader, so a waiting worker drains stdin
+# itself (see `_drain_host_responses`).
+_STDIN_READER_ACTIVE = False
+# Frames read while draining for a host response on Windows, replayed by the
+# serial serve loop before it reads again.
+_HOST_DEFERRED_FRAMES: list[dict] = []
+
+
+def _host_request(name: str, args: Any) -> Any:
+    """Send one request to the host and block until it answers (worker threads only)."""
+    rid = uuid.uuid4().hex
+    box: dict[str, Any] = {"event": threading.Event(), "value": None, "error": None}
+    with _HOST_REQUESTS_LOCK:
+        _HOST_REQUESTS[rid] = box
+    try:
+        _emit(
+            {
+                "type": "host_request",
+                "id": rid,
+                "run": _CURRENT_RID.get(),
+                "name": name,
+                "args": args,
+            }
+        )
+        if not _STDIN_READER_ACTIVE:
+            _drain_host_responses()
+        if not box["event"].wait(_HOST_REQUEST_TIMEOUT_S):
+            raise RuntimeError(f"host request {name!r} timed out after {_HOST_REQUEST_TIMEOUT_S:.0f}s")
+        if box["error"] is not None:
+            raise RuntimeError(box["error"])
+        return box["value"]
+    finally:
+        with _HOST_REQUESTS_LOCK:
+            _HOST_REQUESTS.pop(rid, None)
+
+
+def _route_host_frame(req: dict) -> bool:
+    """Resolve a pending host request; True when the frame was consumed."""
+    kind = req.get("type")
+    if kind not in ("host_response", "host_error"):
+        return False
+    rid = req.get("id")
+    if not isinstance(rid, str):
+        return True
+    with _HOST_REQUESTS_LOCK:
+        box = _HOST_REQUESTS.get(rid)
+    if box is None:
+        return True
+    if kind == "host_error":
+        box["error"] = req.get("error") or "host request failed"
+    else:
+        box["value"] = req.get("value")
+    box["event"].set()
+    return True
+
+
+def _drain_host_responses() -> None:
+    """Read the control channel until every pending host request is answered.
+
+    Windows-only path: the serial serve loop is parked inside the cell that is
+    awaiting the answer, so the worker thread must read stdin itself. Frames
+    that are not answers are deferred for the serve loop to replay.
+    """
+    stdin = sys.__stdin__
+    if stdin is None:
+        return
+    while True:
+        with _HOST_REQUESTS_LOCK:
+            pending = any(not box["event"].is_set() for box in _HOST_REQUESTS.values())
+        if not pending:
+            return
+        raw = stdin.readline()
+        if not raw:
+            return
+        line = raw.strip()
+        if not line:
+            continue
+        req = _parse_request(line)
+        if req is None:
+            continue
+        if _route_host_frame(req):
+            continue
+        _HOST_DEFERRED_FRAMES.append(req)
+
 
 _SHADOW_SNAPSHOT_MAX_DEPTH = 16
 _SHADOW_SNAPSHOT_MAX_NODES = 2000
@@ -1792,8 +1891,10 @@ def _install_builtins(ns: dict) -> None:
     ns["__omp_magic_cell"] = __omp_magic_cell
     ns["__omp_shell"] = __omp_shell
     ns["__omp_current_run_id__"] = lambda: _CURRENT_RID.get()
-    # Judge transport handed off per request (kept out of `os.environ`).
-    ns["__omp_judge_direct__"] = lambda: _STATE.judge_direct
+    # Host-mediated helpers (judge, judge_batch, tool.*, …) ride the runner's
+    # stdio control channel when the HTTP tool bridge is absent, so the host
+    # resolves the session and no credential enters this process.
+    ns["__omp_host_bridge__"] = _host_request
 
 
 _install_builtins(_STATE.user_ns)
@@ -2045,15 +2146,8 @@ _MANAGED_ENV_KEYS = (
     "PI_TOOL_BRIDGE_URL",
     "PI_TOOL_BRIDGE_TOKEN",
     "PI_TOOL_BRIDGE_SESSION",
-    "PI_JUDGE_DIRECT",
     "PI_EVAL_LOCAL_ROOTS",
 )
-
-# Managed env keys stashed into `_STATE` instead of `os.environ`: key-bearing
-# transports, mapped to the `_RunnerState` attribute the prelude accessor reads.
-_ENV_STASHED_KEYS = {
-    "PI_JUDGE_DIRECT": "judge_direct",
-}
 
 
 def _apply_request_runtime(req: dict) -> None:
@@ -2069,11 +2163,6 @@ def _apply_request_runtime(req: dict) -> None:
     env = req.get("env")
     if isinstance(env, dict):
         for key in _MANAGED_ENV_KEYS:
-            if key in _ENV_STASHED_KEYS:
-                # Keep out of os.environ (see _ENV_STASHED_KEYS); prelude reads via accessor.
-                setattr(_STATE, _ENV_STASHED_KEYS[key], env.get(key))
-                os.environ.pop(key, None)
-                continue
             value = env.get(key)
             if isinstance(value, str):
                 os.environ[key] = value
@@ -2373,6 +2462,8 @@ def _read_stdin(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stdin) ->
         req = _parse_request(line)
         if req is None:
             continue
+        if _route_host_frame(req):
+            continue
         if req.get("type") == "tool":
             threading.Thread(
                 target=_handle_tool_request,
@@ -2397,6 +2488,10 @@ async def _serve_posix(loop: asyncio.AbstractEventLoop, stdin) -> None:
     native-extension imports on Windows (see ``_serve_windows``).
     """
     queue: asyncio.Queue = asyncio.Queue()
+    # Claim the control channel before any cell can run: a cell that calls a
+    # host-mediated helper must never fall back to reading stdin itself.
+    global _STDIN_READER_ACTIVE
+    _STDIN_READER_ACTIVE = True
     reader = threading.Thread(
         target=_read_stdin,
         args=(loop, queue, stdin),
@@ -2454,14 +2549,19 @@ async def _serve_windows(loop: asyncio.AbstractEventLoop, stdin) -> None:
     import outright.
     """
     while True:
-        raw_line = await loop.run_in_executor(None, stdin.readline)
-        if not raw_line:
-            break  # EOF: the host closed the control channel.
-        line = raw_line.strip()
-        if not line:
-            continue
-        req = _parse_request(line)
-        if req is None:
+        if _HOST_DEFERRED_FRAMES:
+            req = _HOST_DEFERRED_FRAMES.pop(0)
+        else:
+            raw_line = await loop.run_in_executor(None, stdin.readline)
+            if not raw_line:
+                break  # EOF: the host closed the control channel.
+            line = raw_line.strip()
+            if not line:
+                continue
+            req = _parse_request(line)
+            if req is None:
+                continue
+        if _route_host_frame(req):
             continue
         if req.get("type") == "exit":
             break
