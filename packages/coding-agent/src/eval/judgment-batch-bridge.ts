@@ -300,13 +300,13 @@ export class JudgmentBatch {
 	/** All settled items (successes and failures) keyed by id, mirroring `drain()`'s item shape. */
 	results(): Record<string, JudgmentBatchItem> {
 		const out: Record<string, JudgmentBatchItem> = {};
-		for (const item of this.#settled) out[item.key] = item;
+		for (const item of this.#settled) out[String(item.key)] = item;
 		return out;
 	}
 
 	failed(): Record<string, string> {
 		const out: Record<string, string> = {};
-		for (const item of this.#settled) if (item.error !== undefined) out[item.key] = item.error;
+		for (const item of this.#settled) if (item.error !== undefined) out[String(item.key)] = item.error;
 		return out;
 	}
 
