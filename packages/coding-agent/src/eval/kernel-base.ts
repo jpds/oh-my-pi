@@ -86,6 +86,12 @@ export interface BaseKernelOptions<TExecuteOptions extends KernelExecuteOptions 
 	shutdownGraceMs: number;
 	/** Serializes an execution request into the runner's wire protocol. */
 	buildPayload: (code: string, msgId: string, options?: TExecuteOptions) => string;
+	/**
+	 * Serves runner-initiated host requests (e.g. the Python kernel's
+	 * judge transport) over the control channel. Absent handlers answer with an
+	 * error frame so the runner unwinds instead of hanging.
+	 */
+	handleHostRequest?: (frame: Frame) => Promise<unknown>;
 }
 
 export type FrameType =
@@ -97,7 +103,8 @@ export type FrameType =
 	| "error"
 	| "done"
 	| "shadow_snapshot"
-	| "shadow_plan";
+	| "shadow_plan"
+	| "host_request";
 
 export interface Frame {
 	type: FrameType;
@@ -119,6 +126,15 @@ export interface Frame {
 	digest?: string;
 	admissionRejected?: boolean;
 	values?: Record<string, unknown>;
+	/** Runner-initiated host request: helper name and JSON arguments. */
+	name?: string;
+	args?: unknown;
+	/** Run id the request originated from, so the host resolves that run's session. */
+	run?: string;
+	/** Host response payload for a `host_request`. */
+	value?: unknown;
+	/** Host failure message for a `host_request`. */
+	error?: string;
 }
 
 interface PendingExecution {
@@ -223,10 +239,16 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	#pending = new Map<string, PendingExecution>();
 	#pendingControls = new Map<string, PromiseWithResolvers<Frame>>();
 	readonly #options: BaseKernelOptions<TExecuteOptions>;
+	#hostRequestHandler: ((frame: Frame) => Promise<unknown>) | undefined;
 
 	constructor(id: string, options: BaseKernelOptions<TExecuteOptions>) {
 		this.id = id;
 		this.#options = options;
+	}
+
+	/** Overrides {@link BaseKernelOptions.handleHostRequest} for this kernel instance. */
+	setHostRequestHandler(handler: ((frame: Frame) => Promise<unknown>) | undefined): void {
+		this.#hostRequestHandler = handler;
 	}
 
 	setProcess(proc: Subprocess<"pipe", "pipe", "pipe">) {
@@ -595,6 +617,12 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 	}
 
 	async #handleFrame(frame: Frame): Promise<void> {
+		// Runner-initiated: the id is the runner's own request id, so it has no
+		// pending entry here. Answer it instead of dropping the frame.
+		if (frame.type === "host_request") {
+			void this.#answerHostRequest(frame);
+			return;
+		}
 		const rid = frame.id;
 		if (!rid) return;
 		const control = this.#pendingControls.get(rid);
@@ -661,6 +689,29 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 				pending.finalize?.();
 				return;
 			}
+		}
+	}
+
+	/**
+	 * Serve one runner-initiated request. Failures travel back as an error frame
+	 * so the cell unwinds with a message instead of hanging; a dead pipe is
+	 * swallowed because the kernel is already gone.
+	 */
+	async #answerHostRequest(frame: Frame): Promise<void> {
+		const id = frame.id ?? "";
+		const handler = this.#hostRequestHandler ?? this.#options.handleHostRequest;
+		if (!handler) {
+			await this.#writeLine(
+				JSON.stringify({ type: "host_error", id, error: "host request channel is not configured" }),
+			).catch(() => {});
+			return;
+		}
+		try {
+			const value = await handler(frame);
+			await this.#writeLine(JSON.stringify({ type: "host_response", id, value }));
+		} catch (err) {
+			const error = err instanceof Error ? err.message : String(err);
+			await this.#writeLine(JSON.stringify({ type: "host_error", id, error })).catch(() => {});
 		}
 	}
 

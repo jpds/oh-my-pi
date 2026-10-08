@@ -4,7 +4,7 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import asyncio, collections.abc, contextvars, inspect, os, json, math, re, threading, time, types, typing, uuid
+    import asyncio, collections.abc, contextvars, inspect, os, json, math, re, threading, time, types, typing
     from urllib.parse import unquote
 
 
@@ -416,18 +416,26 @@ if "__omp_prelude_loaded__" not in globals():
 
         return current
 
-    def _tool_proxy_from_env(helper: str | None = None) -> tuple[str, str, str]:
+    def _tool_proxy_from_env() -> tuple[str, str, str] | None:
+        """HTTP tool-bridge coordinates, or None when the host did not provide one."""
         base = os.environ.get("PI_TOOL_BRIDGE_URL")
         token = os.environ.get("PI_TOOL_BRIDGE_TOKEN")
         session = os.environ.get("PI_TOOL_BRIDGE_SESSION")
         if not base or not token or not session:
-            raise RuntimeError(
-                f"{helper or 'host-mediated helpers'} cannot run: no host tool bridge in this kernel "
-                "(no PI_TOOL_BRIDGE_URL; the bridge may be disabled via PI_NO_TOOL_BRIDGE=1 "
-                "or no tool session is attached to this kernel). "
-                "judge()/judge_batch() keep working when a native judge is configured."
-            )
+            return None
         return (base.rstrip("/"), token, session)
+
+    def _host_channel():
+        """Runner-injected stdio host-request channel, when a runner hosts this kernel."""
+        channel = globals().get("__omp_host_bridge__")
+        return channel if callable(channel) else None
+
+    def _bridge_unavailable(helper: str | None) -> RuntimeError:
+        return RuntimeError(
+            f"{helper or 'host-mediated helpers'} cannot run: no host tool bridge in this kernel "
+            "(no PI_TOOL_BRIDGE_URL; the bridge may be disabled via PI_NO_TOOL_BRIDGE=1 "
+            "or no tool session is attached to this kernel) and no runner host-request channel."
+        )
 
     import urllib.error, urllib.request
 
@@ -472,8 +480,14 @@ if "__omp_prelude_loaded__" not in globals():
             self.session = session
 
     def _bridge_call(name: str, args: dict, helper: str | None = None):
-        """POST one request to the host tool bridge and return its `value`."""
-        base, token, session = _tool_proxy_from_env(helper)
+        """Run one host-mediated helper call: HTTP tool bridge first, else the runner's stdio channel."""
+        target = _tool_proxy_from_env()
+        if target is None:
+            channel = _host_channel()
+            if channel is None:
+                raise _bridge_unavailable(helper)
+            return channel(name, args)
+        base, token, session = target
         _run_id_getter = globals().get("__omp_current_run_id__")
         _run_id = (
             _run_id_getter()
@@ -909,42 +923,6 @@ if "__omp_prelude_loaded__" not in globals():
             raise RuntimeError("completion() did not return a handle")
         return CompletionHandle(result["id"], schema)
 
-    # --- direct judgment (PI_JUDGE_DIRECT; no host bridge) -----------------
-    #
-    # Host injects the resolved native judge transport per request; the runner
-    # keeps it out of `os.environ` (so cell code cannot `os.environ` the key
-    # and child processes never inherit it) and hands it to the prelude through
-    # the runner-injected `__omp_judge_direct__()` accessor. Standalone prelude
-    # consumers without a runner still read the `PI_JUDGE_DIRECT` env var.
-    # Without a descriptor they fall back to the host bridge, preserving
-    # judge-role chains with non-native candidates.
-
-    _JUDGE_MAX_ATTEMPTS = 3
-    _JUDGE_BACKOFF_BASE_S = 0.5
-    _JUDGE_BACKOFF_MAX_S = 5.0
-    _JUDGE_TIMEOUT_S = 10.0
-    _JUDGE_BATCH_CONCURRENCY = 32
-    _JUDGE_BATCH_DEFAULT_RETRIES = 1
-    _JUDGE_BATCH_DRAIN_COALESCE_S = 0.1
-
-    _JUDGE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-    def _judge_direct_descriptor() -> dict | None:
-        """Resolved native judge transport (runner-held `__omp_judge_direct__()` or PI_JUDGE_DIRECT env), or None."""
-        accessor = globals().get("__omp_judge_direct__")
-        raw = accessor() if callable(accessor) else os.environ.get("PI_JUDGE_DIRECT")
-        if not raw:
-            return None
-        if isinstance(raw, dict):
-            return raw
-        try:
-            descriptor = json.loads(raw)
-        except json.JSONDecodeError:
-            raise RuntimeError("PI_JUDGE_DIRECT is not valid JSON") from None
-        if not isinstance(descriptor, dict):
-            raise RuntimeError("PI_JUDGE_DIRECT must be a JSON object")
-        return descriptor
-
     def _judge_invalid(detail: str) -> TypeError:
         return TypeError(f"judge() received invalid arguments: {detail}")
 
@@ -1096,7 +1074,7 @@ if "__omp_prelude_loaded__" not in globals():
         return value
 
     class _BridgeBatch:
-        """Operates a host-owned judgment run through the tool bridge."""
+        """Operates a host-owned judgment run over the kernel→host channel."""
 
         __slots__ = ("id",)
 
@@ -1408,10 +1386,10 @@ if "__omp_prelude_loaded__" not in globals():
     class JudgmentBatch:
         """Bulk judgment run. Pull settled items with ``await drain()`` across as many cells as needed.
 
-        ``judge_batch()`` returns synchronously (host-owned on the bridge path;
-        kernel-scoped under a native judge), but the batch is awaitable and
-        resolves to itself, so ``await judge_batch(...)`` and
-        ``judge_batch(...)`` are interchangeable.
+        ``judge_batch()`` returns synchronously (the run is owned by the host,
+        outliving this cell), but the batch is awaitable and resolves to
+        itself, so ``await judge_batch(...)`` and ``judge_batch(...)`` are
+        interchangeable.
         """
 
         __slots__ = ("id", "total", "intent", "_backend")
@@ -1508,9 +1486,11 @@ if "__omp_prelude_loaded__" not in globals():
         ):
             raise TypeError("judge_batch() intent must be a non-empty string")
         if isinstance(states, dict):
-            items = [{"key": key, "state": state} for key, state in states.items()]
+            # Keys are strings everywhere so drain() tuples, item["key"], and
+            # results()/failed() dict keys agree.
+            items = [{"key": str(key), "state": state} for key, state in states.items()]
         elif isinstance(states, (list, tuple)):
-            items = [{"key": index, "state": state} for index, state in enumerate(states)]
+            items = [{"key": str(index), "state": state} for index, state in enumerate(states)]
         else:
             raise TypeError("judge_batch(states, questions) expects states as a dict or list")
         if images is not None:
@@ -1525,11 +1505,6 @@ if "__omp_prelude_loaded__" not in globals():
                     item["images"] = images[item["key"]]
         if not items:
             raise TypeError("judge_batch() received invalid arguments: items must not be empty")
-        descriptor = _judge_direct_descriptor()
-        if descriptor is not None:
-            wire_questions = _judge_wire_questions(questions)
-            run = _start_local_batch(descriptor, items, wire_questions, concurrency, retries, min_ok, intent)
-            return JudgmentBatch(run, run.total, run._intent)
         args = {"op": "create", "items": items, "questions": questions}
         if concurrency is not None:
             args["concurrency"] = int(concurrency)
@@ -1539,13 +1514,10 @@ if "__omp_prelude_loaded__" not in globals():
             args["minOk"] = int(min_ok)
         if intent is not None:
             args["intent"] = intent
-        return _judge_batch_from(_bridge_call("__judge_batch__", args, helper="judge_batch() (bridge fallback)"))
+        return _judge_batch_from(_bridge_call("__judge_batch__", args, helper="judge_batch()"))
 
     def _attach_judge_batch(id):
-        """Re-create a ``JudgmentBatch`` ref by id (kernel-local run, or a host-owned run from another runtime)."""
-        run = _JUDGE_BATCHES.get(str(id))
-        if run is not None:
-            return JudgmentBatch(run, run.total, run._intent)
+        """Re-create a ``JudgmentBatch`` ref by id (the run is owned by the host)."""
         return _judge_batch_from(
             _bridge_call("__judge_batch__", {"op": "attach", "id": str(id)}, helper="judge_batch.attach()")
         )

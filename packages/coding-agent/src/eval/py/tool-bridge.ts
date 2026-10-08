@@ -44,6 +44,12 @@ interface BridgeServer {
 }
 
 const registrations = new Map<string, PyToolBridgeEntry>();
+/**
+ * Run-id index for the runner's stdio transport, whose host requests carry only
+ * the run id (no session id). Kept beside {@link registrations} so the HTTP
+ * bridge's session-scoped lookup is unchanged.
+ */
+const registrationsByRun = new Map<string, PyToolBridgeEntry>();
 let serverPromise: Promise<BridgeServer> | null = null;
 
 function markExpectedBridgeShutdownError(error: unknown): error is Error {
@@ -101,7 +107,7 @@ async function waitForSpeculativeClaim<T>(claim: Promise<T>, name: string, signa
  * ignore the signal, keeping the kernel unwinding promptly instead of being
  * hard-killed.
  */
-async function callSessionToolPromptOnAbort(
+export async function callSessionToolPromptOnAbort(
 	name: string,
 	args: unknown,
 	entry: PyToolBridgeEntry,
@@ -180,7 +186,7 @@ async function startServer(): Promise<BridgeServer> {
 				return Response.json({ ok: false, error: "Missing session/run/name" }, { status: 400 });
 			}
 			const registrationKey = bridgeRegistrationKey(sessionId, runId);
-			const entry = registrations.get(registrationKey) ?? registrations.get(sessionId);
+			const entry = lookupPyToolBridgeEntry(sessionId, runId);
 			if (!entry) {
 				return Response.json(
 					{ ok: false, error: `No active Python tool bridge session: ${registrationKey}` },
@@ -275,16 +281,31 @@ function bridgeRegistrationKey(sessionId: string, runId: string): string {
 export function registerPyToolBridge(sessionId: string, runId: string, entry: PyToolBridgeEntry): () => void {
 	const key = bridgeRegistrationKey(sessionId, runId);
 	registrations.set(key, entry);
+	registrationsByRun.set(runId, entry);
 	return () => {
 		if (registrations.get(key) === entry) {
 			registrations.delete(key);
 		}
+		if (registrationsByRun.get(runId) === entry) {
+			registrationsByRun.delete(runId);
+		}
 	};
+}
+
+/** Resolve the entry for a bridge call: exact run first, then the session fallback. */
+export function lookupPyToolBridgeEntry(sessionId: string, runId: string): PyToolBridgeEntry | undefined {
+	return registrations.get(bridgeRegistrationKey(sessionId, runId)) ?? registrations.get(sessionId);
+}
+
+/** Resolve the entry registered for one run id (runner stdio host requests carry only the run). */
+export function lookupPyToolBridgeEntryByRun(runId: string): PyToolBridgeEntry | undefined {
+	return registrationsByRun.get(runId);
 }
 
 /** Stop the bridge and clear registrations. Test-only / shutdown helper. */
 export async function disposePyToolBridge(): Promise<void> {
 	registrations.clear();
+	registrationsByRun.clear();
 	const pending = serverPromise;
 	serverPromise = null;
 	if (!pending) return;

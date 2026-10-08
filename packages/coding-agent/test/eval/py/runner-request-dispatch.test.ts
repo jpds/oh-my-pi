@@ -10,6 +10,10 @@ interface RunnerFrame {
 	revision?: number;
 	digest?: string;
 	admissionRejected?: boolean;
+	/** Runner-initiated host request: helper name, arguments, and calling run. */
+	name?: string;
+	args?: unknown;
+	run?: string;
 }
 
 const pythonPath = Bun.env.PYTHON ?? ($which("python3") ? "python3" : "python");
@@ -588,12 +592,11 @@ describe("Python runner request dispatch", () => {
 		}
 	});
 
-	it("hands the host-resolved judge transport to the prelude without exposing it to the cell environment", async () => {
-		// The judge transport carries a provider API key. A cell that scans
-		// `os.environ` (or spawns a child that inherits it) must not see it;
-		// only the runner-held `__omp_judge_direct__()` accessor does. The
-		// pre-fix runner kept the descriptor in `os.environ` for the kernel's
-		// lifetime, so the exfiltration assertion below observed the key.
+	it("keeps the judge transport out of the kernel and serves it over the host channel", async () => {
+		// The judge transport carries a provider API key. The kernel must never
+		// hold it: the exec env cannot install `PI_JUDGE_DIRECT`, no
+		// descriptor-returning accessor exists, and the only judge surface is
+		// the call-only host channel the runner forwards to the host.
 		const judge = { api: "typesafe", apiKey: "ts-key-secret" };
 		const runner = spawnRunner();
 		try {
@@ -602,28 +605,45 @@ describe("Python runner request dispatch", () => {
 				env: { PI_JUDGE_DIRECT: JSON.stringify(judge) },
 				code: [
 					"import json, os",
+					'value = __omp_host_bridge__("__judge__", {"state": "hello", "questions": {}})',
 					"print(json.dumps({",
 					'    "judge_in_env": os.environ.get("PI_JUDGE_DIRECT"),',
-					'    "judge_through_accessor": __omp_judge_direct__(),',
+					'    "descriptor_accessor": "__omp_judge_direct__" in globals(),',
+					'    "value": value,',
 					"}))",
 				].join("\n"),
 			});
-			// stdout and done frames are consumed in stream order; collect both.
-			let printed: { judge_in_env: string | null; judge_through_accessor: unknown } | undefined;
+			let printed: { judge_in_env: string | null; descriptor_accessor: boolean; value: unknown } | undefined;
+			let request: RunnerFrame | undefined;
 			let done: RunnerFrame | undefined;
 			while (!printed || !done) {
 				const frame = await runner.nextFrame();
-				if (frame.type === "stdout" && frame.data && frame.id === "cell") {
+				if (frame.type === "host_request") {
+					request = frame;
+					runner.send({
+						type: "host_response",
+						id: frame.id,
+						value: { answers: { q: { type: "bool", bool: 1 } }, model: "typesafe/jev-preview" },
+					});
+				} else if (frame.type === "stdout" && frame.data && frame.id === "cell") {
 					printed = JSON.parse(frame.data);
 				} else if (frame.type === "done" && frame.id === "cell") {
 					done = frame;
 				}
 			}
 			expect(done.status).toBe("ok");
-			// The accessor hands the raw descriptor JSON; the prelude parses it.
+			// The runner forwards the calling run id so the host resolves that
+			// run's tool session, and answers reach the cell verbatim.
+			expect(request).toMatchObject({
+				type: "host_request",
+				run: "cell",
+				name: "__judge__",
+				args: { state: "hello", questions: {} },
+			});
 			expect(printed).toEqual({
 				judge_in_env: null,
-				judge_through_accessor: JSON.stringify(judge),
+				descriptor_accessor: false,
+				value: { answers: { q: { type: "bool", bool: 1 } }, model: "typesafe/jev-preview" },
 			});
 		} finally {
 			await runner.dispose();
