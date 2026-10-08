@@ -227,7 +227,9 @@ async function startServer(): Promise<BridgeServer> {
 		url: `http://${server.hostname}:${server.port}`,
 		token,
 	};
-	logger.debug("Python tool bridge listening", { url: info.url });
+	// Durable, not debug: an unreachable bridge otherwise surfaces only as a
+	// bare connection error inside a kernel cell.
+	logger.info(`Python tool bridge listening ${info.url}`);
 	let stopPromise: Promise<void> | null = null;
 
 	return {
@@ -239,6 +241,10 @@ async function startServer(): Promise<BridgeServer> {
 					error: error.message,
 				});
 			});
+			void stopPromise.then(
+				() => logger.info("Python tool bridge stopped"),
+				() => undefined,
+			);
 			return stopPromise;
 		},
 	};
