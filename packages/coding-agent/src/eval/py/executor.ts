@@ -240,9 +240,7 @@ async function startKernel(cwd: string, options: PythonExecutorOptions): Promise
 	requireRemainingTimeoutMs(options.deadlineMs);
 	const kernel = await PythonKernel.start({
 		cwd,
-		// The key-bearing judge transport rides the per-request env patch, not
-		// the subprocess environment.
-		env: buildManagedKernelEnv(options, { omitDirectTransports: true }),
+		env: buildManagedKernelEnv(options),
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
 		interpreter: options.interpreter,
@@ -425,11 +423,6 @@ async function ensureToolBridge(options: PythonExecutorOptions): Promise<void> {
 	}
 }
 
-/**
- * Resolve the judge role's primary native candidate once per execution. Left
- * unset when the session has no model registry or the chain does not lead with
- * a native judge (those keep host-side fallbacks over the bridge).
- */
 async function executePerCall(code: string, cwd: string, options: PythonExecutorOptions): Promise<PythonResult> {
 	if (options.bridge && !options.bridgeSessionId) {
 		options.bridgeSessionId = `py-bridge:${crypto.randomUUID()}`;

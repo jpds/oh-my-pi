@@ -1386,10 +1386,10 @@ if "__omp_prelude_loaded__" not in globals():
     class JudgmentBatch:
         """Bulk judgment run. Pull settled items with ``await drain()`` across as many cells as needed.
 
-        ``judge_batch()`` returns synchronously (host-owned on the bridge path;
-        kernel-scoped under a native judge), but the batch is awaitable and
-        resolves to itself, so ``await judge_batch(...)`` and
-        ``judge_batch(...)`` are interchangeable.
+        ``judge_batch()`` returns synchronously (the run is owned by the host,
+        outliving this cell), but the batch is awaitable and resolves to
+        itself, so ``await judge_batch(...)`` and ``judge_batch(...)`` are
+        interchangeable.
         """
 
         __slots__ = ("id", "total", "intent", "_backend")
