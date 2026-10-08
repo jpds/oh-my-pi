@@ -525,6 +525,18 @@ describe("python host-mediated judgment (runner stdio channel)", () => {
 			accessor: false,
 			channel: true,
 		});
+
+
+describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
+	const DIRECT_ENV = (baseUrl: string): Record<string, string> => ({
+		PI_JUDGE_DIRECT: JSON.stringify({
+			api: "typesafe",
+			route: "/v1/systemone",
+			provider: "typesafe",
+			model: "jev-preview",
+			baseUrl,
+			apiKey: "ts-key",
+		}),
 	});
 
 	it("surfaces a typed error when the bridge endpoint is unreachable", async () => {
