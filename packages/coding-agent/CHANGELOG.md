@@ -804,14 +804,15 @@
 
 ### Added
 
-- Eval kernels judge without the tool bridge: when the judge role resolves to a native System One judge, its transport is handed to the Python runner per request (kept out of the kernel's `os.environ`, so cells and their child processes cannot read the provider API key) and Python `judge`/`judge_batch` call the provider directly, so judgment works in sandboxes that refuse loopback TCP.
-- `PI_NO_TOOL_BRIDGE=1` skips the eval tool bridge entirely (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers fail fast with a typed, actionable error instead of dialing an unreachable endpoint.
+- Eval kernels reach host-mediated helpers without the tool bridge: the Python runner forwards `judge`, `judge_batch`, `completion()`, `agent()`, `tool.*`, and the other helpers to the host over its stdio control channel, so they work in sandboxes that refuse loopback TCP and no provider credential ever enters the kernel process.
+- `PI_NO_TOOL_BRIDGE=1` skips the eval HTTP tool bridge (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers then run over the runner's stdio channel instead of failing with a typed error.
 
 ### Changed
 
-- Python `judge_batch` runs kernel-locally in direct mode: batches live in the kernel (survive across cells via `judge_batch.attach(id)` within the kernel) rather than host-side; usage is not priced into session cost ledgers for direct judgment calls. Docs now state this scope: kernel-local runs are not host jobs, so `wait`/completion auto-delivery/`agent://` addressing don't apply, `cost` reads 0.0, and a completed batch's transport is released.
+- Python `judge`/`judge_batch` calls are host-mediated like JS: batches are host-owned jobs, so `wait`, completion auto-delivery, `agent://` addressing, and `status().cost` apply to them.
 - Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
 - The `Python tool bridge listening` line is now durable (info-level) and the stop is logged too, so an unreachable bridge is diagnosable from the session log.
+- `judge_batch`/`judgeBatch` item keys are strings in both runtimes: `drain()` tuples, `item.key`, and the `results()`/`failed()` dict keys now agree for list-form states, whose indices were numbers in `drain()` and strings in `results()`.
 
 ### Added
 
@@ -834,6 +835,9 @@
 ### Fixed
 
 - Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
+- The `judge_batch`/`judgeBatch` reference names each runtime's helpers (`judge_batch`/`judgeBatch`, `drain_iter`/`drainIter`) instead of hiding the JS names when Python is also enabled, and notes that JS batch methods return Promises.
+- `judge_batch`/`judgeBatch` `drain()` no longer raises `judge_batch cancelled` for a cancelled run that still met `min_ok`; `cancel()` stops further dispatch (in-flight items finish, unstarted ones settle as `cancelled`).
+- `judge_batch`/`judgeBatch` `status().elapsedS` freezes when the run settles instead of reporting time since start.
 
 ## [18.6.2] - 2026-10-04
 
