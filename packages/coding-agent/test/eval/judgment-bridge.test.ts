@@ -107,7 +107,52 @@ describe("eval judge() bridge", () => {
 		await expect(runEvalJudgment({ state: { fn: () => 1 }, questions: QUESTIONS }, { session })).rejects.toThrow(
 			"state must be a string, a JSON object, or a JSON array",
 		);
+		await expect(
+			runEvalJudgment({ state: "x", questions: [{ type: "bool", instructions: "?" }] }, { session }),
+		).rejects.toThrow('question entry 0 must carry a non-empty string "id"');
+		await expect(
+			runEvalJudgment(
+				{
+					state: "x",
+					questions: [
+						{ id: "t", type: "bool", instructions: "?" },
+						{ id: "t", type: "bool", instructions: "?" },
+					],
+				},
+				{ session },
+			),
+		).rejects.toThrow('duplicate question id "t"');
+		await expect(runEvalJudgment({ state: "x", questions: "tests" }, { session })).rejects.toThrow(
+			'questions must be an object keyed by question id ({q_best: {...}}) or a list of {"id", ...question} entries',
+		);
+		await expect(runEvalJudgment({ state: "x", questions: [] }, { session })).rejects.toThrow(
+			"questions must contain at least one question",
+		);
 		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("accepts list-of-id questions and strips the embedded id", async () => {
+		let body: { questions: unknown } | undefined;
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch(async (_url, init) => {
+				body = JSON.parse(String(init?.body));
+				return Response.json({
+					model: "jev-preview",
+					answers: { tests: { type: "noul", noul: 0.83 } },
+					usage: { input_tokens: 10, output_tokens: 1 },
+				});
+			}),
+		);
+		const result = await runEvalJudgment(
+			{
+				state: "ship it",
+				questions: [{ id: "tests", type: "bool", instructions: "Does the request mention tests?" }],
+			},
+			{ session: makeSession({ typesafe: true }) },
+		);
+
+		expect(result.answers).toEqual({ tests: { type: "bool", bool: 0.83 } });
+		expect(body?.questions).toEqual({ tests: { type: "noul", instructions: "Does the request mention tests?" } });
 	});
 
 	it("answers through the smol chat model and returns typed answers with the backend", async () => {
@@ -187,5 +232,26 @@ describe("eval js judge() prelude", () => {
 				args: { state: "ship it", questions: { ok: { type: "bool", instructions: "Is it ready?" } } },
 			},
 		]);
+
+		const listCalls: Array<{ name: string; args: { questions: unknown } }> = [];
+		const listSandbox: Record<string, unknown> = {
+			__omp_call_tool__: async (name: string, args: { questions: unknown }) => {
+				listCalls.push({ name, args });
+				return { answers: { ok: { type: "bool", bool: 1 } }, model: "p/smol" };
+			},
+		};
+		vm.createContext(listSandbox);
+		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, listSandbox);
+
+		const listAnswers = await vm.runInContext(
+			`judge("ship it", [{ id: "ok", type: "bool", instructions: "Is it ready?" }])`,
+			listSandbox,
+		);
+
+		expect(listAnswers).toEqual({ ok: { type: "bool", bool: 1 } });
+		expect(listCalls[0]?.args.questions).toEqual({ ok: { type: "bool", instructions: "Is it ready?" } });
+		await expect(vm.runInContext(`judge("x", [{ type: "bool", instructions: "?" }])`, listSandbox)).rejects.toThrow(
+			'question entry 0 must carry a non-empty string "id"',
+		);
 	});
 });

@@ -143,17 +143,39 @@ function parseQuestion(id: string, value: unknown): Question {
 	}
 }
 
-/** Validate cell-supplied questions keyed by id; `bool` maps to the library's `noul`. */
+/** Validate cell-supplied questions keyed by id; `bool` maps to the library's `noul`.
+ * Accepts a record keyed by id or a list of `{ id, ...question }` entries (embedded id stripped).
+ */
 export function parseQuestions(value: unknown): Record<string, Question> {
-	if (!isRecord(value)) throw invalid("questions must be an object keyed by question id");
+	const normalized = normalizeQuestions(value);
 	const questions: Record<string, Question> = {};
 	let count = 0;
-	for (const id in value) {
-		questions[id] = parseQuestion(id, value[id]);
+	for (const id in normalized) {
+		questions[id] = parseQuestion(id, normalized[id]);
 		count++;
 	}
 	if (count === 0) throw invalid("questions must contain at least one question");
 	return questions;
+}
+
+function normalizeQuestions(value: unknown): Record<string, unknown> {
+	if (isRecord(value)) return value;
+	if (Array.isArray(value)) {
+		const normalized: Record<string, unknown> = {};
+		for (const [index, entry] of value.entries()) {
+			if (!isRecord(entry)) throw invalid(`question entry ${index} must be an object`);
+			const { id, ...rest } = entry;
+			if (typeof id !== "string" || id.length === 0) {
+				throw invalid(`question entry ${index} must carry a non-empty string "id"`);
+			}
+			if (id in normalized) throw invalid(`duplicate question id "${id}"`);
+			normalized[id] = rest;
+		}
+		return normalized;
+	}
+	throw invalid(
+		'questions must be an object keyed by question id ({q_best: {...}}) or a list of {"id", ...question} entries',
+	);
 }
 
 /** Shape a library judgment result into the cell-facing answers and backend label. */

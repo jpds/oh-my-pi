@@ -374,6 +374,40 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		}
 	});
 
+	it("names the calling helper when a host-mediated helper lacks the bridge", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				"    errors = []",
+				"    async def label(call):",
+				"        try:",
+				"            await call()",
+				'            errors.append("no-error")',
+				"        except RuntimeError as exc:",
+				'            errors.append(str(exc).split(" cannot run:")[0])',
+				'    await label(lambda: tool.read({"path": "x"}))',
+				'    await label(lambda: _omp_prelude("omp_find", {}))',
+				'    await label(lambda: wait([_Handle("missing")], timeout=0))',
+				"    for start in (lambda: completion('hi'), lambda: agent('hi')):",
+				"        try:",
+				"            start()",
+				'            errors.append("no-error")',
+				"        except RuntimeError as exc:",
+				'            errors.append(str(exc).split(" cannot run:")[0])',
+				"    print(json.dumps(errors))",
+				"",
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const errors = JSON.parse(result.stdout.trim());
+		// Each surface reports the helper the cell actually called, not a generic bridge error.
+		expect(errors).toEqual(["tool.read(...)", "omp_find() prelude helper", "wait()", "completion()", "agent()"]);
+	});
+
 	it("rejects judge() arguments client-side without touching the network", async () => {
 		let requests = 0;
 		const server = Bun.serve({

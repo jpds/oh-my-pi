@@ -272,6 +272,7 @@
 - Fixed `omp worktree add` and other git operations failing with `git open: … does not appear to be a git repository` when the checkout directory name ends in `.git` ([#14553](https://github.com/can1357/oh-my-pi/issues/14553))
 - Fixed Mnemopi embedding workers (and other local-model workers) staying alive and holding gigabytes of RAM after the omp process that started them exited mid-embedding ([#14340](https://github.com/can1357/oh-my-pi/issues/14340))
 - Fixed a supervised PTY service on Windows hanging when it asks the terminal for the cursor position; the launch broker now answers the query as it does on Linux and macOS
+
 ### Added
 
 - Eval kernels judge without the tool bridge: when the judge role resolves to a native System One judge, its transport is injected as `PI_JUDGE_DIRECT` and Python `judge`/`judge_batch` call the provider directly, so judgment works in sandboxes that refuse loopback TCP.
@@ -282,6 +283,10 @@
 - Python `judge_batch` runs kernel-locally in direct mode: batches live in the kernel (survive across cells via `judge_batch.attach(id)` within the kernel) rather than host-side; usage is not priced into session cost ledgers for direct judgment calls.
 - Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
 - The `Python tool bridge listening` line is now durable (info-level) and the stop is logged too, so an unreachable bridge is diagnosable from the session log.
+
+### Fixed
+
+- Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
 
 ## [18.6.2] - 2026-10-04
 

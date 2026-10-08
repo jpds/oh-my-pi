@@ -303,13 +303,34 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	};
 
 	const checkQuestions = questions => {
-		if (questions === null || typeof questions !== "object" || Array.isArray(questions)) {
-			throw new TypeError("judge(state, questions) expects questions as an object keyed by id");
+		if (questions !== null && typeof questions === "object" && !Array.isArray(questions)) return questions;
+		if (Array.isArray(questions)) {
+			const normalized = {};
+			for (const [index, entry] of questions.entries()) {
+				if (entry === null || typeof entry !== "object") {
+					throw new TypeError(`question entry ${index} must be an object`);
+				}
+				const { id, ...rest } = entry;
+				if (typeof id !== "string" || id.length === 0) {
+					throw new TypeError(
+						`question entry ${index} must carry a non-empty string "id" (or pass questions as an object keyed by id)`,
+					);
+				}
+				if (id in normalized) throw new TypeError(`duplicate question id "${id}"`);
+				normalized[id] = rest;
+			}
+			if (Object.keys(normalized).length === 0) {
+				throw new TypeError("questions must contain at least one question");
+			}
+			return normalized;
 		}
+		throw new TypeError(
+			'judge questions must be an object keyed by id ({q_best: {...}}) or a list of {"id", ...question} entries',
+		);
 	};
 
 	const judge = async (state, questions) => {
-		checkQuestions(questions);
+		questions = checkQuestions(questions);
 		const result = await globalThis.__omp_call_tool__("__judge__", { state, questions });
 		if (!result || !isPlainObject(result.answers)) throw new Error("judge() did not return answers");
 		return result.answers;
@@ -375,8 +396,12 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 			}
 		}
 
+		// All settled items (successes and failures) keyed by id, mirroring drain()'s item shape.
 		async results() {
-			return (await this._call("results"))?.results ?? {};
+			const result = (await this._call("results"))?.results ?? {};
+			return Object.fromEntries(
+				Object.entries(result).map(([key, item]) => [key, item instanceof JudgmentItem ? item : new JudgmentItem(item)]),
+			);
 		}
 
 		async failed() {
@@ -406,7 +431,7 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	// nonempty progress/job label. Item failures land in `JudgmentItem.error`;
 	// only a run that dies wholesale rejects `drain()`.
 	const judgeBatch = async (states, questions, opts, ...rest) => {
-		checkQuestions(questions);
+		questions = checkQuestions(questions);
 		const options = optionsArg(
 			"judgeBatch",
 			opts,
