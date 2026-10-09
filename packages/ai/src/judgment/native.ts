@@ -21,14 +21,14 @@
  */
 import { resolveJudgmentQuestionsMax } from "@oh-my-pi/pi-catalog/compat/judgment-questions";
 import { TYPESAFE_DEFAULT_BASE_URL } from "@oh-my-pi/pi-catalog/discovery";
-import type { Api, FetchImpl } from "@oh-my-pi/pi-catalog/types";
+import type { Api, FetchImpl, JudgmentConfig } from "@oh-my-pi/pi-catalog/types";
 import { $env, isRecord, parseImageMetadata } from "@oh-my-pi/pi-utils";
 import { type ApiKey, withAuth } from "../auth-retry";
 import * as AIError from "../error";
 import type { ImageContent, Model, Usage } from "../types";
 import { getRetryAfterMsFromHeaders } from "../utils/retry-after";
 import { openaiDecisionsWire } from "./openai-decisions";
-import { openrouterDecisionsWire, typesafeWire, workersAiWire } from "./systemone";
+import { openrouterDecisionsWire, systemOneWireFor, typesafeWire, workersAiWire } from "./systemone";
 import {
 	type Answer,
 	type Judge,
@@ -117,6 +117,12 @@ export interface NativeJudgeOptions extends NativeJudgeConnection {
 	 * a `true` value cannot enable a wire dialect that does not support images.
 	 */
 	supportsImages?: boolean;
+	/**
+	 * Per-model judgment endpoint overrides (route, type/value key maps, usage
+	 * keys). Only System One dialects accept them; the API's own dialect is used
+	 * verbatim when absent.
+	 */
+	judgment?: JudgmentConfig;
 }
 
 /** Per-call options for {@link NativeJudge.judge}. */
@@ -210,7 +216,7 @@ export class NativeJudge implements Judge {
 	constructor(options: NativeJudgeOptions) {
 		this.#apiKey = options.apiKey;
 		this.api = options.api ?? TYPESAFE_PROVIDER;
-		this.#wire = JUDGMENT_WIRES[this.api];
+		this.#wire = options.judgment === undefined ? JUDGMENT_WIRES[this.api] : systemOneWireFor(this.api, options.judgment);
 		this.provider = options.provider ?? TYPESAFE_PROVIDER;
 		this.baseUrl = (options.baseUrl ?? typesafeBaseUrl()).replace(/\/+$/, "");
 		this.model = options.model ?? typesafeModel();
@@ -311,7 +317,7 @@ export class NativeJudge implements Judge {
 		const body = JSON.stringify(this.#wire.encode(request, this.model));
 		const signal = options?.signal;
 		const payload = await withAuth(this.#apiKey, key => this.#attempt(body, key, signal), { signal });
-		const decoded = this.#wire.decode(payload);
+		const decoded = this.#wire.decode(payload, request.questions);
 		if (!decoded) {
 			throw new AIError.ProviderResponseError(`${this.label} returned a malformed judgment response`, {
 				provider: this.provider,
@@ -402,5 +408,6 @@ export function createNativeJudge(model: Model, connection: NativeJudgeConnectio
 		baseUrl: model.baseUrl,
 		maxQuestions: resolveJudgmentQuestionsMax(model),
 		supportsImages: nativeJudgmentSupportsImages(model),
+		judgment: model.judgment,
 	});
 }

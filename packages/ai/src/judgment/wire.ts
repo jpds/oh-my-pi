@@ -4,7 +4,7 @@
  * judgment module; `native.ts` maps every judgment API to its dialect.
  */
 import type { Usage } from "../types";
-import type { JudgmentRequest } from "./types";
+import type { JudgmentRequest, Questions, WireQuestions } from "./types";
 
 /** Where one attempt posts and which bearer token it sends. */
 export interface JudgmentTarget {
@@ -48,11 +48,16 @@ export interface JudgmentWire {
 	 */
 	target(baseUrl: string, model: string, key: string): JudgmentTarget;
 	/** Request body for `model`. */
-	encode(request: JudgmentRequest, model: string): unknown;
+	encode(request: JudgmentRequest<Questions | WireQuestions>, model: string): unknown;
 	/** Image input this dialect accepts; absent means text-only. */
 	images?: JudgmentImageInput;
-	/** The response's answers and usage; `undefined` when the payload is not this API's response shape. */
-	decode(payload: unknown): DecodedJudgment | undefined;
+	/**
+	 * The response's answers and usage for the `questions` asked; `undefined`
+	 * when the payload is not this API's response shape. A dialect whose answer
+	 * discriminator is renamed by a `judgment` override compares against
+	 * `questions` to normalize the wire answers back to their canonical types.
+	 */
+	decode(payload: unknown, questions: Questions): DecodedJudgment | undefined;
 }
 
 /** `value` when it is a finite number. */
