@@ -456,11 +456,65 @@ describe("NativeJudge", () => {
 		expect(calls[0].url).toBe("https://gateway.example/v1/evaluate");
 		const sent = JSON.parse(String(calls[0].init?.body));
 		expect(sent.questions.urgent.type).toBe("boolean");
-		expect(result.answers.urgent).toMatchObject({ type: "noul", noul: 0.9 });
+		expect(result.answers.urgent).toEqual({ type: "noul", noul: 0.9 });
 		expect(result.usage.input).toBe(12);
 		expect(result.usage.output).toBe(3);
 		expect(result.usage.totalTokens).toBe(15);
 		expect(result.usage.cost.total).toBe(0);
+	});
+
+	it("maps a mixed request through a noul-only partial map and drops wire keys", async () => {
+		// The exact Vercel configuration: typeMap/valueMap cover noul only, but
+		// choice/score questions go out with canonical types and come back the
+		// same way — the gateway answers them natively.
+		const judge = createNativeJudge(
+			buildModel({
+				id: "eval-model",
+				name: "Eval Model",
+				api: "typesafe",
+				provider: "vercel-ai-gateway",
+				baseUrl: "https://gateway.example",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: null,
+				judgment: {
+					route: "/v1/evaluate",
+					typeMap: { noul: "boolean" },
+					valueMap: { noul: "probability" },
+					usageMap: { input: "inputTokens", output: "outputTokens" },
+				},
+			}),
+			{
+				apiKey: "v-key",
+				fetch: async (_url, init) => {
+					const sent = JSON.parse(String(init?.body));
+					expect(sent.questions.urgent.type).toBe("boolean");
+					expect(sent.questions.level.type).toBe("choice");
+					return Response.json({
+						model: "eval-model",
+						answers: {
+							urgent: { type: "boolean", probability: 0.9 },
+							level: { type: "choice", choice: "high" },
+						},
+						usage: { inputTokens: 12, outputTokens: 3 },
+					});
+				},
+			},
+		);
+
+		const result = await judge.judge({
+			state: "Is this urgent and how severe?",
+			questions: {
+				urgent: { type: "noul", instructions: "Does this convey urgency?" },
+				level: { type: "choice", instructions: "Pick a tier.", criteria: { low: "simple", high: "complex" } },
+			},
+		});
+
+		// Canonical shape: consumed wire keys (`probability`) are dropped.
+		expect(result.answers.urgent).toEqual({ type: "noul", noul: 0.9 });
+		expect(result.answers.level).toMatchObject({ type: "choice", choice: "high" });
 	});
 
 	it("reads the discriminator from a custom typeField", async () => {

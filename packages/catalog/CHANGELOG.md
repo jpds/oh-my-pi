@@ -104,6 +104,11 @@
 ### Added
 
 - Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+### Added
+
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models (e.g. `vercel-ai-gateway/typesafe-ai/jev`); the catalog supplies their `/v1/evaluate` judgment defaults at build time, so no user config is needed ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added `Model.judgment` (`JudgmentConfig`: `route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) declaring per-model System One judgment endpoint overrides, honored for custom providers and `modelOverrides` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added TypeSafe `jev-1.13` / `jev-1.13-free` judge seeds on the OpenCode Zen gateway (`api: typesafe` under the gateway root) ([#14446](https://github.com/can1357/oh-my-pi/pull/14446) by [@jpds](https://github.com/jpds)).
 
 ## [18.10.0] - 2026-10-12
 
@@ -141,10 +146,6 @@
 ### Fixed
 
 - Fixed Devin's discovered models not marking the account's default model, the one Devin's own CLI starts the account on (SWE-2 High on Pro, SWE-1.6 Slow on Free); when it is an effort lane of a family, the family starts at that effort. Cursor's discovered models no longer carry that marker, so Cursor keeps its existing startup selection ([#15115](https://github.com/can1357/oh-my-pi/pull/15115) by [@will-bogusz](https://github.com/will-bogusz))
-### Added
-
-- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models (e.g. `vercel-ai-gateway/typesafe-ai/jev`); discovered evaluation rows carry their `/v1/evaluate` judgment defaults in-catalog, so no user config is needed ([#15006](https://github.com/can1357/oh-my-pi/pull/15006)).
-- Added `Model.judgment` (`JudgmentConfig`: `route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) declaring per-model System One judgment endpoint overrides, honored for custom providers and `modelOverrides` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
 
 ## [18.8.7] - 2026-10-09
 
@@ -152,7 +153,6 @@
 
 - Added built-in CoralBricks support with `/login`, live model discovery, per-model reasoning levels and off controls, and bundled offline fallbacks. ([#14146](https://github.com/can1357/oh-my-pi/pull/14146) by [@ryan-brosas](https://github.com/ryan-brosas))
 - Added `gen:models --provider <id>` to update one provider without changing other providers' catalog snapshots. ([#14146](https://github.com/can1357/oh-my-pi/pull/14146) by [@ryan-brosas](https://github.com/ryan-brosas))
-- Added TypeSafe `jev-1.13` / `jev-1.13-free` judge seeds on the OpenCode Zen gateway (`api: typesafe` under the gateway root) ([#14446](https://github.com/can1357/oh-my-pi/pull/14446) by [@jpds](https://github.com/jpds)).
 
 ### Fixed
 
