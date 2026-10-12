@@ -4157,7 +4157,7 @@ export function vercelAiGatewayModelManagerOptions(
 ): ModelManagerOptions<Api> {
 	const apiKey = config?.apiKey;
 	const { baseUrl, catalogBaseUrl } = normalizeVercelAiGatewayBaseUrls(config?.baseUrl);
-	return {
+	const options: ModelManagerOptions<Api> = {
 		providerId: "vercel-ai-gateway",
 		fetchDynamicModels: () =>
 			fetchOpenAICompatibleModels<Api>({
@@ -4225,6 +4225,12 @@ export function vercelAiGatewayModelManagerOptions(
 				},
 				fetch: config?.fetch,
 			}),
+	};
+	const fetchDiscovered = options.fetchDynamicModels;
+	if (!fetchDiscovered) return options;
+	return {
+		...options,
+		fetchDynamicModels: async () => appendUnbundledSeedModels("vercel-ai-gateway", await fetchDiscovered()),
 	};
 }
 

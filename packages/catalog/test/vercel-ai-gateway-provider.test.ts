@@ -1,6 +1,22 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
+import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { vercelAiGatewayModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+
+function mockModelsList(
+	data: (Record<string, unknown> & { id: string })[],
+): typeof fetch {
+	return (async () => Response.json({ object: "list", data })) as unknown as typeof fetch;
+}
+
+function byId(models: { id: string }[] | null | undefined): Map<string, { id: string }> {
+	return new Map((models ?? []).map(model => [model.id, model]));
+}
 
 describe("Vercel AI Gateway provider", () => {
 	test("caps meta/muse-spark-1.2-contributor output allowance to 131072 while preserving context window", async () => {
@@ -169,9 +185,183 @@ describe("Vercel AI Gateway provider", () => {
 
 		const options = vercelAiGatewayModelManagerOptions({ fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
-		const byId = new Map((models ?? []).map(model => [model.id, model]));
-		expect(byId.get(chatId)).toBeDefined();
-		expect(byId.get(droppedChatId)).toBeUndefined();
-		expect(byId.get(jevId)).toBeDefined();
+		const map = byId(models);
+		expect(map.get(chatId)).toBeDefined();
+		expect(map.get(droppedChatId)).toBeUndefined();
+		expect(map.get(jevId)).toBeDefined();
+	});
+
+	test("detects image capability on evaluation rows via modalities.input or vision tag", async () => {
+		const options = vercelAiGatewayModelManagerOptions({
+			fetch: mockModelsList([
+				{
+					id: "typesafe-ai/modal-jev",
+					object: "model",
+					type: "evaluation",
+					modalities: { input: ["text", "image"] },
+				},
+				{
+					id: "typesafe-ai/tagged-jev",
+					object: "model",
+					type: "evaluation",
+					tags: ["vision"],
+				},
+				{
+					id: "typesafe-ai/plain-jev",
+					object: "model",
+					type: "evaluation",
+				},
+			]),
+		});
+
+		const models = await options.fetchDynamicModels?.();
+		const map = byId(models);
+		expect(map.get("typesafe-ai/modal-jev")?.input).toEqual(["text", "image"]);
+		expect(map.get("typesafe-ai/tagged-jev")?.input).toEqual(["text", "image"]);
+		expect(map.get("typesafe-ai/plain-jev")?.input).toEqual(["text"]);
+	});
+	test.each(["typesafe-ai/jev", "microsoft/microsoft-decision-1", "liquid/d1", "openai/gpt-6-luna-decisions"])(
+		"forces refetch of stale cached eval row %s on static fingerprint mismatch",
+		async id => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-vercel-cache-"));
+			const cacheDbPath = path.join(tempDir, "models.db");
+			try {
+				const staleRow = {
+					...buildModel({
+						id,
+						name: `${id} (stale)`,
+						provider: "vercel-ai-gateway",
+						api: "anthropic-messages",
+						baseUrl: "https://ai-gateway.vercel.sh",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 32_768,
+						maxTokens: 2_048,
+					}),
+					kind: "chat" as const,
+					judgment: undefined,
+				};
+
+				writeModelCache(
+					"vercel-ai-gateway",
+					Date.now(),
+					[staleRow],
+					true,
+					"mismatched-static-fingerprint",
+					cacheDbPath,
+				);
+
+				let fetches = 0;
+				const fetchMock = mockModelsList([
+					{
+						id,
+						name: `${id} (Discovered)`,
+						object: "model",
+						type: "evaluation",
+						context_window: 64_000,
+					},
+				]);
+
+				const result = await resolveProviderModels(
+					{
+						...vercelAiGatewayModelManagerOptions({
+							fetch: (async (input, init) => {
+								fetches++;
+								return fetchMock(input, init);
+							}) as unknown as typeof fetch,
+						}),
+						cacheDbPath,
+					},
+					"online-if-uncached",
+				);
+
+				// The stale cached id is listed in dropCachedModelIdsOnStaticMismatch,
+				// so the fingerprint mismatch forces a refetch instead of serving stale cache.
+				expect(fetches).toBe(1);
+				expect(result.source).toBe("provider");
+
+				const row = result.models.find(model => model.id === id);
+				expect(row).toBeDefined();
+				expect(row?.kind).toBe("judge");
+				expect(row?.api).toBe("typesafe");
+
+				const updatedCache = readModelCache("vercel-ai-gateway", Number.POSITIVE_INFINITY, Date.now, cacheDbPath);
+				const cachedRow = updatedCache?.models.find(model => model.id === id);
+				expect(cachedRow?.kind).toBe("judge");
+				expect(updatedCache?.models.some(model => model.id === id && model.kind === "chat")).toBe(false);
+			} finally {
+				await fs.rm(tempDir, { recursive: true, force: true });
+			}
+		},
+	);
+
+	test("bundled seed resolves with kind judge and KDL judgment contract", () => {
+		const seededIds = [
+			"typesafe-ai/jev",
+			"microsoft/microsoft-decision-1",
+			"liquid/d1",
+			"openai/gpt-6-luna-decisions",
+		];
+		const seeds = seedModels("vercel-ai-gateway");
+		expect(seeds.length).toBeGreaterThanOrEqual(seededIds.length);
+		for (const id of seededIds) {
+			const seed = seeds.find(model => model.id === id);
+			expect(seed).toBeDefined();
+			if (!seed) continue;
+			const built = buildModel(seed);
+			expect(built.kind).toBe("judge");
+			expect(built.api).toBe("typesafe");
+			expect(built.supportsTools).toBe(false);
+			expect(built.judgment).toEqual({
+				route: "/v1/evaluate",
+				typeMap: { noul: "boolean" },
+				valueMap: { noul: "probability" },
+				usageMap: { input: "inputTokens", output: "outputTokens" },
+			});
+		}
+	});
+
+	test("seeded id is replaced cleanly by live discovery row (explicitKindModels replace, not dup)", async () => {
+		const seeds = seedModels("vercel-ai-gateway").map(seed => buildModel(seed));
+		const jevSeed = seeds.find(model => model.id === "typesafe-ai/jev");
+		expect(jevSeed).toBeDefined();
+
+		const options = vercelAiGatewayModelManagerOptions({
+			fetch: mockModelsList([
+				{
+					id: "typesafe-ai/jev",
+					name: "Jev (Discovered)",
+					object: "model",
+					owned_by: "typesafe-ai",
+					type: "evaluation",
+					context_window: 64_000,
+					pricing: { input: 0.00000005, output: 0 },
+				},
+			]),
+		});
+
+		const result = await resolveProviderModels(
+			{
+				...options,
+				staticModels: seeds,
+				cacheDbPath: ":memory:",
+			},
+			"online",
+		);
+
+		const jevRows = result.models.filter(model => model.id === "typesafe-ai/jev");
+		expect(jevRows).toHaveLength(1);
+		const jev = jevRows[0];
+		expect(jev?.name).toBe("Jev (Discovered)");
+		expect(jev?.kind).toBe("judge");
+		expect(jev?.contextWindow).toBe(64_000);
+		expect(jev?.cost?.input).toBeCloseTo(0.05, 9);
+		expect(jev?.judgment).toEqual({
+			route: "/v1/evaluate",
+			typeMap: { noul: "boolean" },
+			valueMap: { noul: "probability" },
+			usageMap: { input: "inputTokens", output: "outputTokens" },
+		});
 	});
 });
