@@ -86,10 +86,12 @@ function decodeSystemOne(
 }
 
 /** The `questions` of `request` in `judgment`'s wire shape: the discriminator renamed and type-mapped when configured. */
-function encodeQuestions(request: { questions: Questions }, judgment: JudgmentConfig | undefined): Questions {
+function encodeQuestions(
+	request: { questions: Questions },
+	judgment: JudgmentConfig | undefined,
+): Record<string, Record<string, unknown>> {
 	const typeField = judgment?.typeField ?? "type";
 	const typeMap = judgment?.typeMap;
-	if (typeMap === undefined && typeField === "type") return request.questions;
 	const questions: Record<string, Record<string, unknown>> = {};
 	for (const id in request.questions) {
 		const question = request.questions[id];
@@ -97,7 +99,7 @@ function encodeQuestions(request: { questions: Questions }, judgment: JudgmentCo
 		if (typeField !== "type") delete wire.type;
 		questions[id] = wire;
 	}
-	return questions as Questions;
+	return questions;
 }
 
 /** A System One dialect posting the request to `path` under the base URL with the key as bearer, in `judgment`'s shape. */
