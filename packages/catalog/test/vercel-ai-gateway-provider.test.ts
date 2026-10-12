@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { vercelAiGatewayModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 function mockModelsList(
 	data: (Record<string, unknown> & { id: string })[],
@@ -74,6 +72,9 @@ describe("Vercel AI Gateway provider", () => {
 		const models = await options.fetchDynamicModels?.();
 		const jev = (models ?? []).find(mo => mo.id === "typesafe-ai/jev");
 		expect(jev?.baseUrl).toBe("https://proxy.example");
+		// The other three seeds are appended (not discovered) — they must rebase too,
+		// or a proxied consumer would send credential + request to the public gateway.
+		expect(byId(models).get("liquid/d1")?.baseUrl).toBe("https://proxy.example");
 	});
 
 	test("maps type:evaluation rows to api typesafe kind judge beside chat rows", async () => {
@@ -223,76 +224,72 @@ describe("Vercel AI Gateway provider", () => {
 	test.each(["typesafe-ai/jev", "microsoft/microsoft-decision-1", "liquid/d1", "openai/gpt-6-luna-decisions"])(
 		"forces refetch of stale cached eval row %s on static fingerprint mismatch",
 		async id => {
-			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-vercel-cache-"));
-			const cacheDbPath = path.join(tempDir, "models.db");
-			try {
-				const staleRow = {
-					...buildModel({
-						id,
-						name: `${id} (stale)`,
-						provider: "vercel-ai-gateway",
-						api: "anthropic-messages",
-						baseUrl: "https://ai-gateway.vercel.sh",
-						reasoning: false,
-						input: ["text"],
-						cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-						contextWindow: 32_768,
-						maxTokens: 2_048,
+			await using tempDir = await TempDir.create("@pi-catalog-vercel-cache-");
+			const cacheDbPath = tempDir.join("models.db");
+			const staleRow = {
+				...buildModel({
+					id,
+					name: `${id} (stale)`,
+					provider: "vercel-ai-gateway",
+					api: "anthropic-messages",
+					baseUrl: "https://ai-gateway.vercel.sh",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 32_768,
+					maxTokens: 2_048,
+				}),
+				kind: "chat" as const,
+				judgment: undefined,
+			};
+
+			writeModelCache(
+				"vercel-ai-gateway",
+				Date.now(),
+				[staleRow],
+				true,
+				"mismatched-static-fingerprint",
+				cacheDbPath,
+			);
+
+			let fetches = 0;
+			const fetchMock = mockModelsList([
+				{
+					id,
+					name: `${id} (Discovered)`,
+					object: "model",
+					type: "evaluation",
+					context_window: 64_000,
+				},
+			]);
+
+			const result = await resolveProviderModels(
+				{
+					...vercelAiGatewayModelManagerOptions({
+						fetch: (async (input, init) => {
+							fetches++;
+							return fetchMock(input, init);
+						}) as unknown as typeof fetch,
 					}),
-					kind: "chat" as const,
-					judgment: undefined,
-				};
-
-				writeModelCache(
-					"vercel-ai-gateway",
-					Date.now(),
-					[staleRow],
-					true,
-					"mismatched-static-fingerprint",
 					cacheDbPath,
-				);
+				},
+				"online-if-uncached",
+			);
 
-				let fetches = 0;
-				const fetchMock = mockModelsList([
-					{
-						id,
-						name: `${id} (Discovered)`,
-						object: "model",
-						type: "evaluation",
-						context_window: 64_000,
-					},
-				]);
+			// The stale cached id is listed in dropCachedModelIdsOnStaticMismatch,
+			// so the fingerprint mismatch forces a refetch instead of serving stale cache.
+			expect(fetches).toBe(1);
+			expect(result.source).toBe("provider");
 
-				const result = await resolveProviderModels(
-					{
-						...vercelAiGatewayModelManagerOptions({
-							fetch: (async (input, init) => {
-								fetches++;
-								return fetchMock(input, init);
-							}) as unknown as typeof fetch,
-						}),
-						cacheDbPath,
-					},
-					"online-if-uncached",
-				);
+			const row = result.models.find(model => model.id === id);
+			expect(row).toBeDefined();
+			expect(row?.kind).toBe("judge");
+			expect(row?.api).toBe("typesafe");
 
-				// The stale cached id is listed in dropCachedModelIdsOnStaticMismatch,
-				// so the fingerprint mismatch forces a refetch instead of serving stale cache.
-				expect(fetches).toBe(1);
-				expect(result.source).toBe("provider");
-
-				const row = result.models.find(model => model.id === id);
-				expect(row).toBeDefined();
-				expect(row?.kind).toBe("judge");
-				expect(row?.api).toBe("typesafe");
-
-				const updatedCache = readModelCache("vercel-ai-gateway", Number.POSITIVE_INFINITY, Date.now, cacheDbPath);
-				const cachedRow = updatedCache?.models.find(model => model.id === id);
-				expect(cachedRow?.kind).toBe("judge");
-				expect(updatedCache?.models.some(model => model.id === id && model.kind === "chat")).toBe(false);
-			} finally {
-				await fs.rm(tempDir, { recursive: true, force: true });
-			}
+			const updatedCache = readModelCache("vercel-ai-gateway", Number.POSITIVE_INFINITY, Date.now, cacheDbPath);
+			const cachedRow = updatedCache?.models.find(model => model.id === id);
+			expect(cachedRow?.kind).toBe("judge");
+			expect(updatedCache?.models.some(model => model.id === id && model.kind === "chat")).toBe(false);
 		},
 	);
 

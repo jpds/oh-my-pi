@@ -1142,12 +1142,13 @@ export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): Mo
 function appendUnbundledSeedModels(
 	providerId: GeneratedProvider,
 	discovered: readonly ModelSpec<Api>[] | null,
+	baseUrl?: string,
 ): readonly ModelSpec<Api>[] | null {
 	if (!discovered) return null;
 	const known = new Set(getBundledModels(providerId).map(model => model.id));
 	for (const model of discovered) known.add(model.id);
 	const seeds = seedModels(providerId).filter(seed => !known.has(seed.id));
-	return seeds.length === 0 ? discovered : [...discovered, ...seeds.map(seed => ({ ...seed }))];
+	return seeds.length === 0 ? discovered : [...discovered, ...seeds.map(seed => (baseUrl !== undefined ? { ...seed, baseUrl } : { ...seed }))];
 }
 
 /**
@@ -4230,7 +4231,7 @@ export function vercelAiGatewayModelManagerOptions(
 	if (!fetchDiscovered) return options;
 	return {
 		...options,
-		fetchDynamicModels: async () => appendUnbundledSeedModels("vercel-ai-gateway", await fetchDiscovered()),
+		fetchDynamicModels: async () => appendUnbundledSeedModels("vercel-ai-gateway", await fetchDiscovered(), baseUrl),
 	};
 }
 
