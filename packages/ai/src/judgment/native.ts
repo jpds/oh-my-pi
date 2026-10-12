@@ -28,7 +28,7 @@ import * as AIError from "../error";
 import type { ImageContent, Model, Usage } from "../types";
 import { getRetryAfterMsFromHeaders } from "../utils/retry-after";
 import { openaiDecisionsWire } from "./openai-decisions";
-import { openrouterDecisionsWire, systemOneWireFor, typesafeWire, workersAiWire } from "./systemone";
+import { openrouterDecisionsWire, typesafeWire, workersAiWire } from "./systemone";
 import {
 	type Answer,
 	type Judge,
@@ -38,7 +38,7 @@ import {
 	type Questions,
 	tokenUsage,
 } from "./types";
-import type { JudgmentImageInput, JudgmentWire } from "./wire";
+import { decorateJudgmentWire, type JudgmentImageInput, type JudgmentWire } from "./wire";
 
 export const TYPESAFE_PROVIDER = "typesafe";
 export const TYPESAFE_DEFAULT_MODEL = "jev-latest";
@@ -216,9 +216,6 @@ export class NativeJudge implements Judge {
 	constructor(options: NativeJudgeOptions) {
 		this.#apiKey = options.apiKey;
 		this.api = options.api ?? TYPESAFE_PROVIDER;
-<<<<<<< HEAD
-		this.#wire = options.judgment === undefined ? JUDGMENT_WIRES[this.api] : systemOneWireFor(this.api, options.judgment);
-=======
 		const wire = JUDGMENT_WIRES[this.api];
 		if (options.judgment && wire === openaiDecisionsWire) {
 			throw new AIError.ConfigurationError(`${this.api} does not support judgment overrides`);
@@ -227,7 +224,6 @@ export class NativeJudge implements Judge {
 			throw new AIError.ConfigurationError(`${this.api} does not support judgment route override`);
 		}
 		this.#wire = decorateJudgmentWire(wire, options.judgment);
->>>>>>> 4e9cf77575 (fix(judgment,catalog): hardened Vercel judge wiring per adversarial review)
 		this.provider = options.provider ?? TYPESAFE_PROVIDER;
 		this.baseUrl = (options.baseUrl ?? typesafeBaseUrl()).replace(/\/+$/, "");
 		this.model = options.model ?? typesafeModel();

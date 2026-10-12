@@ -49,6 +49,7 @@ import {
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
+import { configuredMunitoBaseUrl } from "@oh-my-pi/pi-catalog/wire/munito";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
@@ -186,6 +187,17 @@ const ADDITIVE_MODELS_DEV_CATALOG_PROVIDER_ID_LOOKUP: Readonly<Record<string, tr
 const FACTORY_REGION_ENV_PROVIDERS: Readonly<Record<string, true>> = Object.freeze(
 	Object.fromEntries(["munito"].map(providerId => [providerId, true as const])),
 );
+
+/**
+ * Endpoint a factory-owned regional env override currently selects, if any
+ * (`MUNITO_BASE_URL` normalized through the provider's wire helper).
+ * Discovery precedence stays with the provider's factory; this only scopes
+ * cache identities.
+ */
+function factoryEnvRegionBaseUrl(providerId: string): string | undefined {
+	if (providerId === "munito") return configuredMunitoBaseUrl(Bun.env.MUNITO_BASE_URL);
+	return undefined;
+}
 
 /**
  * Bedrock provider-scoped fields to spread onto a model spec, dropping keys
@@ -1339,7 +1351,10 @@ export class ModelRegistry {
 			this.#providerOverrides.get(providerId)?.baseUrl ??
 			(this.#hasFullSnapshot && FACTORY_REGION_ENV_PROVIDERS[providerId] !== true
 				? this.getProviderBaseUrl(providerId)
-				: undefined)
+				: undefined) ??
+			// An immediate regional env override scopes the pre-refresh cache read
+			// and discovery config; the factory still owns precedence.
+			factoryEnvRegionBaseUrl(providerId)
 		);
 	}
 
