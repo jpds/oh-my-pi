@@ -107,7 +107,7 @@ function judgmentConfig(value: unknown): JudgmentConfig | undefined {
 	if (typeMap !== undefined) config.typeMap = typeMap;
 	const valueMap = stringRecord(Reflect.get(payload, "valueMap"), ["noul", "choice", "score"]);
 	if (valueMap !== undefined) config.valueMap = valueMap;
-	const usageMap = stringRecord(Reflect.get(payload, "usageMap"), ["input", "output"]);
+	const usageMap = stringRecord(Reflect.get(payload, "usageMap"), ["input", "output", "cost"]);
 	if (usageMap !== undefined) config.usageMap = usageMap;
 	return Object.keys(config).length > 0 ? config : undefined;
 }

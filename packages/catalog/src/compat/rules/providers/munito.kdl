@@ -1,0 +1,31 @@
+// Catalog entry for "munito" (api.munito.ai): EU-based open-model inference
+// (https://docs.munito.ai). One key is valid on the global, EU, and US hosts.
+
+provider "munito" {
+	default-model "qwen/qwen3.8-27b"
+	env "MUNITO_API_KEY"
+	// A retired id must leave the picker instead of lingering as a dead
+	// bundled row.
+	dynamic-models-authoritative #true
+	// GET /models is public (invalid keys still 401), so generation-time
+	// discovery runs keyless; the seed covers a regen that cannot reach the
+	// endpoint.
+	discovery label="Munito" allow-unauthenticated=#true
+
+	seed api="openai-completions" base-url="https://api.munito.ai/inference/v1" bundle="fallback" {
+		// Upstream Qwen3.8-27B facts only: munito publishes no per-model
+		// tariff (cost stays 0) and asserts no limits claim.
+		model "qwen/qwen3.8-27b" name="Qwen3.8 27B" {
+			reasoning #true
+			input "text" "image"
+			cost input=0 output=0 cache-read=0 cache-write=0
+			limits
+			supports-tools #true
+		}
+	}
+
+	// The chat endpoint answers 400 to parameters outside its documented
+	// whitelist (`max_tokens`; the OpenAI-baseline `max_completion_tokens`
+	// spelling is not accepted).
+	max-tokens-field "max_tokens"
+}
