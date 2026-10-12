@@ -179,6 +179,15 @@ const ADDITIVE_MODELS_DEV_CATALOG_PROVIDER_ID_LOOKUP: Readonly<Record<string, tr
 );
 
 /**
+ * Providers whose catalog factory owns the endpoint override itself
+ * (`MUNITO_BASE_URL`). A row-derived `baseUrl` passed in as `config.baseUrl`
+ * would shadow the env override and send the key to the global host.
+ */
+const FACTORY_REGION_ENV_PROVIDERS: Readonly<Record<string, true>> = Object.freeze(
+	Object.fromEntries(["munito"].map(providerId => [providerId, true as const])),
+);
+
+/**
  * Bedrock provider-scoped fields to spread onto a model spec, dropping keys
  * that a provider override left unset so an override never clobbers an
  * existing value with `undefined`.
@@ -1328,15 +1337,14 @@ export class ModelRegistry {
 		return (
 			this.#runtimeProviderOverrides.get(providerId)?.baseUrl ??
 			this.#providerOverrides.get(providerId)?.baseUrl ??
-			(this.#hasFullSnapshot ? this.getProviderBaseUrl(providerId) : undefined)
+			(this.#hasFullSnapshot && FACTORY_REGION_ENV_PROVIDERS[providerId] !== true
+				? this.getProviderBaseUrl(providerId)
+				: undefined)
 		);
 	}
 
 	#resolveStartupModelCacheProviderId(providerId: string): string {
-		const baseUrl =
-			this.#runtimeProviderOverrides.get(providerId)?.baseUrl ??
-			this.#providerOverrides.get(providerId)?.baseUrl ??
-			(this.#hasFullSnapshot ? this.getProviderBaseUrl(providerId) : undefined);
+		const baseUrl = this.#descriptorBaseUrl(providerId);
 		return resolveModelCacheProviderId(providerId, { baseUrl });
 	}
 

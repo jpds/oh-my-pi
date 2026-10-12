@@ -167,7 +167,7 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				usage = tokenUsage(
 					finiteNumber(rawUsage[usageMap.input ?? "input_tokens"]),
 					finiteNumber(rawUsage[usageMap.output ?? "output_tokens"]),
-					finiteNumber(rawUsage.cost),
+					finiteNumber(rawUsage[usageMap.cost ?? "cost"] ?? rawUsage.cost),
 				);
 			}
 

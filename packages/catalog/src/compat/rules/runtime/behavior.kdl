@@ -24,7 +24,10 @@ behavior {
 	// controls; matching them by bare model id contaminates unrelated proxy
 	// models (a LiteLLM proxy serving `glm-5.3-flash`), so its rows are barred
 	// from seeding cross-provider bare-id enrichment references (#10932).
-	reference-isolated-providers "cline-pass"
+	// Munito likewise hosts upstream open-weight models at a $0 tariff with
+	// provider-asserted limits; without isolation its rows would outrank the
+	// priced Nvidia/Kilo/Novita references for the same canonical ids.
+	reference-isolated-providers "cline-pass" "munito"
 
 	// Discovered Responses/Codex models receive these additional operations.
 	model-operations provider="openai" {
@@ -169,6 +172,10 @@ behavior {
 	// Helmcode's /v1/models roster lists embedding, rerank, TTS, and STT models
 	// beside the chat models (helmcode.com/docs/models).
 	exclude-models provider="helmcode" exact="qwen3-embedding" exact="rerank" exact="kokoro" exact="whisper"
+	// Munito's /models roster interleaves its OCR SKUs; they only serve the
+	// document API, no chat transport.
+	exclude-models provider="munito" exact="munito/ocr-auto" exact="munito/ocr-fast" \
+		exact="lightonai/lightonocr-2-1b"
 	// SuperGrok's roster interleaves media models the chat picker cannot
 	// serve; the dedicated tool surfaces route them instead.
 	exclude-models provider="xai-oauth" exact="grok-imagine-image-quality" exact="grok-imagine-image-2.0" \
