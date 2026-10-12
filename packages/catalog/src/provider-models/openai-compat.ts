@@ -46,6 +46,7 @@ import { normalizeCharmHyperBaseUrl } from "../wire/charm-hyper";
 import { CLINEPASS_API_BASE_URL, clinePassClientHeaders } from "../wire/cline-pass";
 import { CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL } from "../wire/cloudflare-ai-gateway";
 import { coreWeaveProjectHeaders } from "../wire/coreweave";
+import { configuredMunitoBaseUrl, normalizeMunitoBaseUrl } from "../wire/munito";
 import {
 	COPILOT_API_HEADERS,
 	COPILOT_DISCOVERY_HEADERS,
@@ -547,6 +548,43 @@ function mapWithBundledReference<TApi extends Api>(
 		baseUrl: defaults.baseUrl,
 		contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
 		maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
+	};
+}
+
+/**
+ * Canonical-reference recovery for resellers whose `/models` rows carry only
+ * `id`/`owned_by`: an id bundled on the discovering provider hydrates through
+ * {@link mapWithBundledReference}; anything else recovers intrinsic
+ * capabilities (context window, output limit, reasoning, thinking) from the
+ * bundled canonical reference index (`recover-canonical-params` providers).
+ * Identity, pricing, compat, and routes are never borrowed: a host with no
+ * per-model tariff stays zeroed.
+ */
+export function mapCanonicalReferenceModel<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	if (reference) {
+		return mapWithBundledReference(entry, defaults, reference);
+	}
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as ModelSpec<TApi> | undefined;
+	if (!canonical) {
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	}
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		...(canonical.thinking && { thinking: canonical.thinking }),
+		contextWindow,
+		maxTokens,
 	};
 }
 
@@ -1171,50 +1209,6 @@ export interface GmiCloudModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-/**
- * Map a discovered GMI Cloud model to a full spec.
- *
- * GMI's `/v1/models` returns only bare `{id}` rows, so discovery defaults carry
- * no limits, reasoning, or thinking metadata. When a gmi-cloud bundled
- * reference exists (the seeded default) it supplies GMI's published tariff and
- * limits directly. Every other id is an open-weight model GMI resells under its
- * canonical id (`deepseek-ai/…`, `moonshotai/…`, `zai-org/…`, `Qwen/…`), so its
- * intrinsic capabilities — context window, output limit, reasoning, thinking
- * ladder — are recovered from any bundled upstream entry via the canonical
- * reference index. Pricing is deliberately never borrowed across providers:
- * GMI's per-model tariff is unknown for these ids, so cost stays zeroed rather
- * than inheriting another provider's rate.
- */
-function mapGmiCloudModel(
-	entry: OpenAICompatibleModelRecord,
-	defaults: ModelSpec<"openai-completions">,
-	reference: ModelSpec<"openai-completions"> | undefined,
-): ModelSpec<"openai-completions"> {
-	if (reference) {
-		return mapWithBundledReference(entry, defaults, reference);
-	}
-	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as
-		| ModelSpec<"openai-completions">
-		| undefined;
-	if (!canonical) {
-		return { ...defaults, name: toModelName(entry.name, defaults.name) };
-	}
-	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
-	const maxTokens =
-		canonical.maxTokens != null && contextWindow != null
-			? Math.min(canonical.maxTokens, contextWindow)
-			: (canonical.maxTokens ?? defaults.maxTokens);
-	return {
-		...defaults,
-		name: toModelName(entry.name, canonical.name ?? defaults.name),
-		reasoning: canonical.reasoning,
-		input: canonical.input,
-		...(canonical.thinking && { thinking: canonical.thinking }),
-		contextWindow,
-		maxTokens,
-	};
-}
-
 export function gmiCloudModelManagerOptions(
 	config?: GmiCloudModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -1225,7 +1219,7 @@ export function gmiCloudModelManagerOptions(
 		cacheProviderId: resolveModelCacheProviderId("gmi-cloud"),
 		config,
 		requireApiKey: true,
-		mapModel: mapGmiCloudModel,
+		mapModel: mapCanonicalReferenceModel,
 	});
 }
 
@@ -5386,6 +5380,65 @@ export function stepfunModelManagerOptions(
 		// Must live on the manager options, not only the KDL descriptor:
 		// `createModelManager()` prunes the bundled slice from this flag.
 		dynamicModelsAuthoritative: true,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// 16.10 Munito
+// ---------------------------------------------------------------------------
+
+/**
+ * Munito discovery config: API key plus base-URL and fetch overrides, for
+ * {@link munitoModelManagerOptions} and direct/extension construction.
+ */
+export interface MunitoModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/**
+ * Chat models only: Munito's OCR SKUs are excluded via `runtime/behavior.kdl`
+ * (`exclude-models provider="munito"`).
+ */
+export function isMunitoChatModelId(id: string): boolean {
+	const normalized = id.trim().toLowerCase();
+	if (!normalized) {
+		return false;
+	}
+	return !isExcludedModel("munito", normalized);
+}
+
+/** `config.baseUrl` > `MUNITO_BASE_URL` > global host, normalized. */
+export function resolveMunitoBaseUrl(config?: { baseUrl?: string }): string {
+	return normalizeMunitoBaseUrl(configuredMunitoBaseUrl(config?.baseUrl) ?? Bun.env.MUNITO_BASE_URL);
+}
+
+/**
+ * Munito model-manager options. The regional endpoint from `config.baseUrl`
+ * or `MUNITO_BASE_URL` covers discovery and cache identity; bundled rows
+ * stay on the global host and are redirected at inference in
+ * `packages/ai/src/providers/openai-shared.ts`. The endpoint is written back
+ * into `config.baseUrl` because discovery requests `<baseUrl>/models`
+ * verbatim.
+ */
+export function munitoModelManagerOptions(
+	config?: MunitoModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const configuredEndpoint =
+		configuredMunitoBaseUrl(config?.baseUrl) ?? configuredMunitoBaseUrl(Bun.env.MUNITO_BASE_URL);
+	const baseEndpoint = normalizeMunitoBaseUrl(config?.baseUrl ?? Bun.env.MUNITO_BASE_URL);
+	return createOpenAICompatibleModelManagerOptions({
+		api: "openai-completions",
+		providerId: "munito",
+		defaultBaseUrl: baseEndpoint,
+		config: configuredEndpoint === undefined ? config : { ...config, baseUrl: configuredEndpoint },
+		// Namespace keyed on the endpoint: a region switch must not serve the
+		// previous region's warm cache.
+		cacheProviderId: resolveModelCacheProviderId("munito", { baseUrl: configuredEndpoint ?? baseEndpoint }),
+		dynamicModelsAuthoritative: true,
+		filterModel: (_entry, model) => isMunitoChatModelId(model.id),
+		mapModel: mapCanonicalReferenceModel,
 	});
 }
 
