@@ -6,6 +6,7 @@
 
 - Added the `NativeJudge` `judgment` option (`route`, `typeField`, `typeMap`, `valueMap`, `usageMap`), taken from the catalog model by `createNativeJudge`, so `typesafe`-family models can answer System One judgments on compatible third-party endpoints such as the Vercel AI Gateway's `/v1/evaluate` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
 - Added `NativeJudge` judgment support (`route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) so compatible endpoints such as the Vercel AI Gateway's `/v1/evaluate` can answer System One judgments ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added a request-time `MUNITO_BASE_URL` redirect for Munito models: bundled rows still pointing at the global host move to the configured regional endpoint, and configured base URLs are normalized onto the `/inference/v1` surface ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
 
 ### Removed
 
