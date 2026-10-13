@@ -689,6 +689,18 @@ describe("NativeJudge", () => {
 					judgment: { typeField: "kind", valueMap: { noul: "kind" } },
 				}),
 		).toThrow(ConfigurationError);
+		// Choice/score metadata must survive the value copy.
+		for (const canonical of ["choice", "score"] as const) {
+			for (const wireKey of ["probabilities", "confidence"]) {
+				expect(
+					() =>
+						new NativeJudge({
+							apiKey: "k",
+							judgment: { valueMap: { [canonical]: wireKey } },
+						}),
+				).toThrow(ConfigurationError);
+			}
+		}
 	});
 
 	it("rejects typeField naming reserved question or prototype keys", () => {

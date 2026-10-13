@@ -104,7 +104,13 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 	}
 	if (valueMap !== undefined) {
 		for (const [canonical, wireKey] of Object.entries(valueMap)) {
-			if (wireKey === typeField || RESERVED_VALUE_KEYS.has(wireKey)) {
+			// Choice/score answers require their metadata siblings: consuming
+			// `probabilities`/`confidence` as the value source would delete a
+			// required field (noul answers carry neither, so they stay allowed).
+			const consumesMetadata =
+				(canonical === "choice" || canonical === "score") &&
+				(wireKey === "probabilities" || wireKey === "confidence");
+			if (wireKey === typeField || RESERVED_VALUE_KEYS.has(wireKey) || consumesMetadata) {
 				throw new AIError.ConfigurationError(
 					`judgment.valueMap for "${canonical}" must not name reserved key "${wireKey}"`,
 				);
