@@ -66,6 +66,7 @@ export function finiteNumber(value: unknown): number | undefined {
 }
 
 const RESERVED_VALUE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const RESERVED_TYPE_FIELDS = new Set(["instructions", "criteria", ...RESERVED_VALUE_KEYS]);
 
 /**
  * Decorate a path-based System One wire (typesafe/openrouter-decisions)
@@ -87,6 +88,11 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 	const typeMap = config.typeMap;
 	const valueMap = config.valueMap;
 	const usageMap = config.usageMap;
+	if (RESERVED_TYPE_FIELDS.has(typeField)) {
+		throw new AIError.ConfigurationError(
+			`judgment.typeField must not name reserved key "${typeField}"`,
+		);
+	}
 	if (valueMap !== undefined) {
 		for (const [canonical, wireKey] of Object.entries(valueMap)) {
 			if (wireKey === typeField || RESERVED_VALUE_KEYS.has(wireKey)) {
@@ -171,6 +177,9 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				}
 
 				const normalized: Record<string, unknown> = { ...raw };
+				if (typeField !== "type") {
+					delete normalized[typeField];
+				}
 				if (valueMap !== undefined) {
 					const wireKey = valueMap[canonical];
 					if (wireKey !== undefined && wireKey !== canonical && normalized[wireKey] !== undefined) {
@@ -179,9 +188,6 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 					}
 				}
 				normalized.type = canonical;
-				if (typeField !== "type") {
-					delete normalized[typeField];
-				}
 				answers[id] = normalized;
 			}
 

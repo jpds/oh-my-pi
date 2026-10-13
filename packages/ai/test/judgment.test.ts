@@ -640,6 +640,38 @@ describe("NativeJudge", () => {
 		expect(result.answers.urgent).toEqual({ type: "noul", noul: 0.7 });
 	});
 
+	it("preserves mapped values when typeField matches the answer key", async () => {
+		const judge = new NativeJudge({
+			apiKey: "b-key",
+			baseUrl: "https://bifrost.example",
+			model: "judge-model",
+			judgment: {
+				typeField: "choice",
+				typeMap: { choice: "selection" },
+				valueMap: { choice: "value" },
+			},
+			fetch: async () =>
+				Response.json({
+					model: "judge-model",
+					answers: { pick: { choice: "selection", value: "yes" } },
+					usage: {},
+				}),
+		});
+
+		const result = await judge.judge({
+			state: "Select an option.",
+			questions: {
+				pick: {
+					type: "choice",
+					instructions: "Which option?",
+					criteria: { yes: "Affirmative", no: "Negative" },
+				},
+			},
+		});
+
+		expect(result.answers.pick).toEqual({ type: "choice", choice: "yes" });
+	});
+
 	it("rejects valueMap values naming reserved keys", () => {
 		for (const key of ["type", "__proto__", "constructor", "prototype"]) {
 			expect(
@@ -657,6 +689,30 @@ describe("NativeJudge", () => {
 					judgment: { typeField: "kind", valueMap: { noul: "kind" } },
 				}),
 		).toThrow(ConfigurationError);
+	});
+
+	it("rejects typeField naming reserved question or prototype keys", () => {
+		for (const key of ["instructions", "criteria", "__proto__", "constructor", "prototype"]) {
+			expect(
+				() =>
+					new NativeJudge({
+						apiKey: "k",
+						judgment: { typeField: key },
+					}),
+			).toThrow(ConfigurationError);
+		}
+	});
+
+	it("allows custom non-reserved typeField names", () => {
+		for (const key of ["type", "kind", "discriminator", "choice", "noul", "score"]) {
+			expect(
+				() =>
+					new NativeJudge({
+						apiKey: "k",
+						judgment: { typeField: key },
+					}),
+			).not.toThrow();
+		}
 	});
 
 	it("surfaces validation errors without retrying and rejects answers of the wrong type", async () => {
