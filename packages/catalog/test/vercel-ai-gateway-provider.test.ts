@@ -394,6 +394,7 @@ describe("Vercel AI Gateway provider", () => {
 			name: "Jev",
 			provider: "vercel-ai-gateway",
 			api: "typesafe" as const,
+			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: false,
 			input: ["text" as const],
 			cost: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0 },

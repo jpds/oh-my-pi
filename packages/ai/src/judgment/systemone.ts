@@ -72,7 +72,7 @@ function decodeSystemOne(
 		const answer: Record<string, unknown> = { ...raw, type: canonical };
 		if (typeField !== "type") delete answer[typeField];
 		if (valueMap !== undefined) {
-			for (const canonicalKey in valueMap) {
+			for (const canonicalKey of Object.keys(valueMap) as ("choice" | "noul" | "score")[]) {
 				const wireKey = valueMap[canonicalKey];
 				if (answer[canonicalKey] === undefined && wireKey !== undefined && answer[wireKey] !== undefined) {
 					answer[canonicalKey] = answer[wireKey];
@@ -92,8 +92,12 @@ function encodeQuestions(
 ): Record<string, Record<string, unknown>> {
 	const typeField = judgment?.typeField ?? "type";
 	const typeMap = judgment?.typeMap;
-	const questions: Record<string, Record<string, unknown>> = {};
+	const questions: Record<string, Record<string, unknown>> = Object.create(null) as Record<
+		string,
+		Record<string, unknown>
+	>;
 	for (const id in request.questions) {
+		if (!Object.hasOwn(request.questions, id)) continue;
 		const question = request.questions[id];
 		const wire: Record<string, unknown> = { ...question, [typeField]: typeMap?.[question.type] ?? question.type };
 		if (typeField !== "type") delete wire.type;
@@ -107,7 +111,7 @@ function systemOneWire(path: string, judgment?: JudgmentConfig): JudgmentWire {
 	return {
 		target: (baseUrl, _model, key) => ({ url: `${baseUrl}${path}`, token: key }),
 		encode: (request, model) => ({ state: request.state, model, questions: encodeQuestions(request, judgment) }),
-		decode: (payload, questions) => decodeSystemOne(payload, questions, judgment),
+		decode: (payload, questions) => decodeSystemOne(payload, questions ?? {}, judgment),
 	};
 }
 
@@ -161,5 +165,6 @@ export const workersAiWire: JudgmentWire = {
 		questions: request.questions,
 		...(request.images?.length ? { images: request.images.map(embeddedImageDataUrl) } : {}),
 	}),
-	decode: (payload, questions) => (isRecord(payload) ? decodeSystemOne(payload.result, questions, undefined) : undefined),
+	decode: (payload, questions) =>
+		isRecord(payload) ? decodeSystemOne(payload.result, questions ?? {}, undefined) : undefined,
 };
