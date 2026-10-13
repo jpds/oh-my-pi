@@ -66,7 +66,13 @@ export function finiteNumber(value: unknown): number | undefined {
 }
 
 const RESERVED_VALUE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-const RESERVED_TYPE_FIELDS = new Set(["instructions", "criteria", ...RESERVED_VALUE_KEYS]);
+const RESERVED_TYPE_FIELDS = new Set([
+	"instructions",
+	"criteria",
+	"probabilities",
+	"confidence",
+	...RESERVED_VALUE_KEYS,
+]);
 const CANONICAL_ANSWER_KEYS = new Set(["choice", "noul", "score"]);
 
 function isCanonicalAnswerKey(key: string): key is "choice" | "noul" | "score" {
@@ -94,9 +100,7 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 	const valueMap = config.valueMap;
 	const usageMap = config.usageMap;
 	if (RESERVED_TYPE_FIELDS.has(typeField)) {
-		throw new AIError.ConfigurationError(
-			`judgment.typeField must not name reserved key "${typeField}"`,
-		);
+		throw new AIError.ConfigurationError(`judgment.typeField must not name reserved key "${typeField}"`);
 	}
 	if (valueMap !== undefined) {
 		for (const [canonical, wireKey] of Object.entries(valueMap)) {

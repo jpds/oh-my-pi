@@ -692,7 +692,15 @@ describe("NativeJudge", () => {
 	});
 
 	it("rejects typeField naming reserved question or prototype keys", () => {
-		for (const key of ["instructions", "criteria", "__proto__", "constructor", "prototype"]) {
+		for (const key of [
+			"instructions",
+			"criteria",
+			"probabilities",
+			"confidence",
+			"__proto__",
+			"constructor",
+			"prototype",
+		]) {
 			expect(
 				() =>
 					new NativeJudge({
