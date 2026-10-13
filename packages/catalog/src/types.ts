@@ -1406,9 +1406,9 @@ export interface JudgmentConfig {
 	/** Discriminator field name; default "type". */
 	typeField?: string;
 	/** Canonical question type -> wire type, e.g. {noul:"boolean"}. */
-	typeMap?: Record<string, string>;
+	typeMap?: JudgmentTypeMap;
 	/** Canonical answer value key -> wire value key, e.g. {noul:"probability"}. */
-	valueMap?: Record<string, string>;
+	valueMap?: JudgmentValueMap;
 	usageMap?: JudgmentUsageMap;
 }
 

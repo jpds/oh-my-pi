@@ -266,9 +266,9 @@ describe("Vercel AI Gateway provider", () => {
 			const result = await resolveProviderModels(
 				{
 					...vercelAiGatewayModelManagerOptions({
-						fetch: (async (input, init) => {
+						fetch: (async (...args: Parameters<typeof fetch>) => {
 							fetches++;
-							return fetchMock(input, init);
+							return fetchMock(...args);
 						}) as unknown as typeof fetch,
 					}),
 					cacheDbPath,

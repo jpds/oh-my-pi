@@ -25,6 +25,11 @@ provider "vercel-ai-gateway" {
 				}
 			}
 		}
+		// residue: evaluation judge models
+		models "typesafe-ai/jev" "microsoft/microsoft-decision-1" "liquid/d1" "openai/gpt-6-luna-decisions" \
+			"convaiinnovations/laya" "convaiinnovations/laya-free" {
+			kind "judge"
+		}
 	}
 
 	// residue: the bare `deepseek/*` namespace rides the Anthropic route, whose

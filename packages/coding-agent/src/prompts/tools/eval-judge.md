@@ -1,12 +1,7 @@
 ```
-<<<<<<< HEAD
 completion(prompt, model?="default"|"smol"|"slow", system?=None, schema?=None) → handle; `.wait()` returns text (parsed with `schema`). Stateless, no tools/history.
 {{#if py}}await judge(state, questions, images?=[path | ImageContent, …]){{else}}await judge(state, questions, { images?: [path | ImageContent, …] }){{/if}} → `{id: answer}`
     Typed judgment over one `state` (str | JSON object | JSON array). Every question sees the same state and is answered independently: batch independent questions into one call. Cheap and fast (TypeSafe when credentialed, else the tiny/smol chat model); prefer over a plain chat call for classification, yes/no, ranking. Two or more states → `{{#if py}}judge_batch{{else}}judgeBatch{{/if}}`, never a loop of `judge()`.
-=======
-await judge(state, questions) → `{id: answer}`
-    Typed judgment over one `state` (str | JSON object | JSON array). Every question sees the same state and is answered independently: batch independent questions into one call. Cheap and fast (TypeSafe when credentialed, else the tiny/smol chat model); prefer over a plain chat call for classification, yes/no, ranking. Two or more states → {{#if py}}`judge_batch`{{/if}}{{#if js}}{{#if py}} (Python) / {{/if}}`judgeBatch`{{#if py}} (JS){{/if}}{{/if}}, never a loop of `judge()`.
->>>>>>> f8a1dbb5a1 (docs(eval): judge helper spellings, ownership, and changelog)
     `questions`: dict keyed by id (`{id: q}`); a list of `{id, ...q}` entries also accepted; q is one of
       `{type: "choice", instructions, criteria: {label: rubric | None, …}}` → `{choice, probabilities: {label: p}, confidence}` (≥2 labels)
       `{type: "bool", instructions, criteria?: {true?: str, false?: str}}` → `{bool: P(yes)}`

@@ -1139,16 +1139,15 @@ export function openaiModelManagerOptions(config?: OpenAIModelManagerConfig): Mo
  * already bundled keep resolving through the bundled slice, and the static
  * catalog (and with it the cache fingerprint) stays the bundled one.
  */
-function appendUnbundledSeedModels(
+function appendUnbundledSeedModels<TApi extends Api = Api>(
 	providerId: GeneratedProvider,
-	discovered: readonly ModelSpec<Api>[] | null,
-	baseUrl?: string,
-): readonly ModelSpec<Api>[] | null {
+	discovered: readonly ModelSpec<TApi>[] | null,
+): readonly ModelSpec<TApi>[] | null {
 	if (!discovered) return null;
 	const known = new Set(getBundledModels(providerId).map(model => model.id));
 	for (const model of discovered) known.add(model.id);
-	const seeds = seedModels(providerId).filter(seed => !known.has(seed.id));
-	return seeds.length === 0 ? discovered : [...discovered, ...seeds.map(seed => (baseUrl !== undefined ? { ...seed, baseUrl } : { ...seed }))];
+	const seeds = seedModels<TApi>(providerId).filter(seed => !known.has(seed.id));
+	return seeds.length === 0 ? discovered : [...discovered, ...seeds.map(seed => ({ ...seed }))];
 }
 
 /**
@@ -4143,9 +4142,13 @@ export interface VercelAiGatewayModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+const DEFAULT_VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
+
 function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { baseUrl: string; catalogBaseUrl: string } {
-	const baseUrl = (rawBaseUrl === undefined ? "https://ai-gateway.vercel.sh" : rawBaseUrl.trim()).replace(/\/+$/, "");
-	const catalogBaseUrl = baseUrl === "" || baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+	const trimmed = rawBaseUrl?.trim();
+	const canonical = trimmed === undefined || trimmed === "" ? undefined : trimmed;
+	const baseUrl = (canonical ?? DEFAULT_VERCEL_AI_GATEWAY_BASE_URL).replace(/\/+$/, "");
+	const catalogBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 
 	return {
 		baseUrl: baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl,
@@ -4153,15 +4156,24 @@ function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { bas
 	};
 }
 
+// convaiinnovations/laya and laya-free are temporary promo models omitted from seeds
+// due to promo fragility (expiring 2026-10-31), but cached rows must drop on static mismatch.
+const VERCEL_AI_GATEWAY_STATIC_MODEL_IDS = [
+	...seedModels("vercel-ai-gateway").map(model => model.id),
+	"convaiinnovations/laya",
+	"convaiinnovations/laya-free",
+];
+
 export function vercelAiGatewayModelManagerOptions(
 	config?: VercelAiGatewayModelManagerConfig,
-): ModelManagerOptions<Api> {
+): ModelManagerOptions<"anthropic-messages" | "typesafe"> {
 	const apiKey = config?.apiKey;
 	const { baseUrl, catalogBaseUrl } = normalizeVercelAiGatewayBaseUrls(config?.baseUrl);
-	const options: ModelManagerOptions<Api> = {
+	const options: ModelManagerOptions<"anthropic-messages" | "typesafe"> = {
 		providerId: "vercel-ai-gateway",
+		dropCachedModelIdsOnStaticMismatch: VERCEL_AI_GATEWAY_STATIC_MODEL_IDS,
 		fetchDynamicModels: () =>
-			fetchOpenAICompatibleModels<Api>({
+			fetchOpenAICompatibleModels<"anthropic-messages" | "typesafe">({
 				api: "anthropic-messages",
 				provider: "vercel-ai-gateway",
 				baseUrl: catalogBaseUrl,
@@ -4173,12 +4185,19 @@ export function vercelAiGatewayModelManagerOptions(
 				},
 				mapModel: (
 					entry: OpenAICompatibleModelRecord,
-					defaults: ModelSpec<Api>,
-					_context: OpenAICompatibleModelMapperContext<Api>,
-				): ModelSpec<Api> => {
+					defaults: ModelSpec<"anthropic-messages" | "typesafe">,
+				): ModelSpec<"anthropic-messages" | "typesafe"> => {
+					const pricing = isRecord(entry.pricing) ? entry.pricing : undefined;
+					const cost = {
+						input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
+						output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
+						cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
+						cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
+					};
+					const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : [];
+
 					if (entry.type === "evaluation") {
-						const pricing = entry.pricing as Record<string, unknown> | undefined;
-						const modalities = entry.modalities as { input?: unknown } | undefined;
+						const modalities = isRecord(entry.modalities) ? entry.modalities : undefined;
 						const inputModalities = Array.isArray(modalities?.input) ? modalities.input : [];
 						return {
 							...defaults,
@@ -4186,21 +4205,15 @@ export function vercelAiGatewayModelManagerOptions(
 							baseUrl,
 							kind: "judge",
 							reasoning: false,
-							input: inputModalities.includes("image") ? ["text", "image"] : ["text"],
+							input: inputModalities.includes("image") || tags.includes("vision") ? ["text", "image"] : ["text"],
 							supportsTools: false,
-							cost: {
-								input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
-								output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
-								cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
-								cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
-							},
-							contextWindow:
-								typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
-							maxTokens: typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens,
+							cost,
+							contextWindow: toPositiveNumber(entry.context_window, defaults.contextWindow),
+							maxTokens: toPositiveNumber(entry.max_tokens, defaults.maxTokens),
 						};
 					}
-					const pricing = entry.pricing as Record<string, unknown> | undefined;
-					const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : [];
+
+					const contextWindow = toPositiveNumber(entry.context_window, defaults.contextWindow);
 					const reportedMaxTokens = typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens;
 					const modelId = typeof entry.id === "string" ? entry.id : defaults.id;
 					const maxTokens =
@@ -4213,14 +4226,8 @@ export function vercelAiGatewayModelManagerOptions(
 						baseUrl,
 						reasoning: tags.includes("reasoning"),
 						input: tags.includes("vision") ? ["text", "image"] : ["text"],
-						cost: {
-							input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
-							output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
-							cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
-							cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
-						},
-						contextWindow:
-							typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
+						cost,
+						contextWindow,
 						maxTokens,
 					};
 				},
@@ -4231,9 +4238,26 @@ export function vercelAiGatewayModelManagerOptions(
 	if (!fetchDiscovered) return options;
 	return {
 		...options,
-		fetchDynamicModels: async () => appendUnbundledSeedModels("vercel-ai-gateway", await fetchDiscovered(), baseUrl),
+		fetchDynamicModels: async () => {
+			const discovered = await fetchDiscovered();
+			const models = appendUnbundledSeedModels<"anthropic-messages" | "typesafe">("vercel-ai-gateway", discovered);
+			if (!models) return null;
+			const discoveredCount = discovered?.length ?? 0;
+			return models.map((model, index): ModelSpec<"anthropic-messages" | "typesafe"> => {
+				if (index < discoveredCount) return model;
+				const shouldRebase = model.baseUrl === DEFAULT_VERCEL_AI_GATEWAY_BASE_URL;
+				return {
+					...model,
+					...(model.api === "typesafe" ? { kind: "judge" as const } : {}),
+					baseUrl: shouldRebase ? baseUrl : model.baseUrl,
+				};
+			});
+		},
 	};
 }
+
+// ------
+
 
 // ---------------------------------------------------------------------------
 // 12. Kimi Code

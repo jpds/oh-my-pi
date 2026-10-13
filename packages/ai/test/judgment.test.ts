@@ -517,6 +517,71 @@ describe("NativeJudge", () => {
 		expect(result.answers.level).toMatchObject({ type: "choice", choice: "high" });
 	});
 
+	const VERCEL_JUDGMENT = {
+		route: "/v1/evaluate",
+		typeMap: { noul: "boolean" },
+		valueMap: { noul: "probability" },
+		usageMap: { input: "inputTokens", output: "outputTokens" },
+	};
+	const makeVercelJudge = (fetch: NonNullable<ConstructorParameters<typeof NativeJudge>[0]>["fetch"]) =>
+		new NativeJudge({
+			apiKey: "v-key",
+			baseUrl: "https://gateway.example",
+			model: "eval-model",
+			judgment: VERCEL_JUDGMENT,
+			fetch,
+		});
+
+	it("does not assign undefined when a mapped wire value is absent", async () => {
+		const judge = makeVercelJudge(async () =>
+			Response.json({
+				model: "eval-model",
+				answers: { urgent: { type: "boolean" } },
+				usage: { inputTokens: 12, outputTokens: 3 },
+			}),
+		);
+
+		const result = await judge.judge(request);
+		expect(result.answers.urgent).toEqual({ type: "noul" } as never);
+		expect("noul" in result.answers.urgent).toBe(false);
+	});
+
+	it("preserves a __proto__ question id through Vercel mapping", async () => {
+		let postedBody: { questions?: Record<string, unknown> } | undefined;
+		const judge = makeVercelJudge(async (_url, init) => {
+			postedBody = JSON.parse(String(init?.body));
+			return Response.json({
+				model: "eval-model",
+				answers: {
+					["__proto__"]: { type: "boolean", probability: 0.95 },
+				},
+				usage: { inputTokens: 10, outputTokens: 2 },
+			});
+		});
+
+		const result = await judge.judge({
+			state: "Urgent issue!",
+			questions: {
+				["__proto__"]: { type: "noul", instructions: "Is it urgent?" },
+			},
+		});
+
+		expect(postedBody?.questions).toBeDefined();
+		expect(Object.hasOwn(postedBody!.questions!, "__proto__")).toBe(true);
+		expect(postedBody!.questions!.__proto__).toEqual({ type: "boolean", instructions: "Is it urgent?" });
+		expect(Object.hasOwn(result.answers, "__proto__")).toBe(true);
+		expect(result.answers["__proto__"]).toEqual({ type: "noul", noul: 0.95 });
+	});
+
+	it("rejects a route override that does not start with a slash", async () => {
+		const judge = new NativeJudge({
+			apiKey: "v-key",
+			baseUrl: "https://gateway.example",
+			judgment: { route: "v1/evaluate" },
+		});
+		await expect(judge.judge(request)).rejects.toBeInstanceOf(ConfigurationError);
+	});
+
 	it("reads the discriminator from a custom typeField", async () => {
 		const judge = createNativeJudge(
 			buildModel({
@@ -552,6 +617,46 @@ describe("NativeJudge", () => {
 		expect(result.answers.urgent).toMatchObject({ type: "noul", noul: 0.7 });
 		expect(result.usage.input).toBe(8);
 		expect(result.usage.totalTokens).toBe(10);
+	});
+
+	it("maps wire answers when valueMap targets 'type' under custom typeField", async () => {
+		const judge = new NativeJudge({
+			apiKey: "b-key",
+			baseUrl: "https://bifrost.example",
+			model: "judge-model",
+			judgment: {
+				typeField: "kind",
+				valueMap: { noul: "type" },
+			},
+			fetch: async () =>
+				Response.json({
+					model: "judge-model",
+					answers: { urgent: { kind: "noul", type: 0.7 } },
+					usage: {},
+				}),
+		});
+
+		const result = await judge.judge(request);
+		expect(result.answers.urgent).toEqual({ type: "noul", noul: 0.7 });
+	});
+
+	it("rejects valueMap values naming reserved keys", () => {
+		for (const key of ["type", "__proto__", "constructor", "prototype"]) {
+			expect(
+				() =>
+					new NativeJudge({
+						apiKey: "k",
+						judgment: { valueMap: { noul: key } },
+					}),
+			).toThrow(ConfigurationError);
+		}
+		expect(
+			() =>
+				new NativeJudge({
+					apiKey: "k",
+					judgment: { typeField: "kind", valueMap: { noul: "kind" } },
+				}),
+		).toThrow(ConfigurationError);
 	});
 
 	it("surfaces validation errors without retrying and rejects answers of the wrong type", async () => {
@@ -610,6 +715,33 @@ describe("NativeJudge", () => {
 		sizes.length = 0;
 		await expect(judgeWith(undefined).judge({ state: "s", questions })).rejects.toBeInstanceOf(JudgmentApiError);
 		expect(sizes).toEqual([20]);
+	});
+
+	it("preserves a __proto__ question id through chunked merging", async () => {
+		const judge = new NativeJudge({
+			apiKey: "k",
+			maxQuestions: 1,
+			fetch: async (_url, init) => {
+				const ids = Object.keys(JSON.parse(String(init?.body)).questions);
+				return Response.json({
+					model: "openjev-4b",
+					answers: Object.fromEntries(ids.map(id => [id, { type: "noul", noul: 0.5 }])),
+					usage: { input_tokens: 10, output_tokens: 1 },
+				});
+			},
+		});
+
+		const result = await judge.judge({
+			state: "s",
+			questions: {
+				["__proto__"]: { type: "noul", instructions: "Is it urgent?" },
+				q1: { type: "noul", instructions: "Is it late?" },
+			},
+		});
+
+		expect(Object.hasOwn(result.answers, "__proto__")).toBe(true);
+		expect(result.answers["__proto__"]).toEqual({ type: "noul", noul: 0.5 });
+		expect(result.answers.q1).toEqual({ type: "noul", noul: 0.5 });
 	});
 
 	it("aborts in-flight sibling chunks when one chunk fails", async () => {
@@ -1110,6 +1242,20 @@ describe("NativeJudge Workers AI dialect", () => {
 			await expect(judge.judge(request)).rejects.toBeInstanceOf(ConfigurationError);
 		});
 		expect(calls).toBe(0);
+	});
+
+	it("rejects route override on account-scoped wire with ConfigurationError", () => {
+		expect(
+			() =>
+				new NativeJudge({
+					api: "workers-ai-systemone",
+					apiKey: "cf-token",
+					judgment: { route: "/custom/route" },
+				}),
+		).toThrow(ConfigurationError);
+
+		const clefWithRoute = { ...clef, judgment: { route: "/custom/route" } };
+		expect(() => createNativeJudge(clefWithRoute, { apiKey: "cf-token" })).toThrow(ConfigurationError);
 	});
 });
 
