@@ -22,7 +22,6 @@ import {
 	removeBlankCoreWeaveProjectHeaders,
 } from "@oh-my-pi/pi-catalog/wire/coreweave";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
-import { MUNITO_GLOBAL_BASE_URL, configuredMunitoBaseUrl } from "@oh-my-pi/pi-catalog/wire/munito";
 import {
 	$env,
 	classifyJsonPrefix,
@@ -284,18 +283,6 @@ export function resolveOpenAIRequestSetup(
 		const sakanaBaseUrl = resolveSakanaRequestBaseUrl();
 		if (sakanaBaseUrl) {
 			baseUrl = sakanaBaseUrl;
-		}
-	}
-	if (model.provider === "munito") {
-		// `MUNITO_BASE_URL` redirects bundled rows off the global host; a row
-		// already on a regional endpoint stays put. Normalize the model URL
-		// first so a bare-host config spelling is recognized.
-		const regionalBaseUrl = configuredMunitoBaseUrl($env.MUNITO_BASE_URL);
-		const modelBaseUrl = configuredMunitoBaseUrl(model.baseUrl);
-		if (regionalBaseUrl && (modelBaseUrl ?? MUNITO_GLOBAL_BASE_URL) === MUNITO_GLOBAL_BASE_URL) {
-			baseUrl = regionalBaseUrl;
-		} else if (modelBaseUrl && modelBaseUrl !== model.baseUrl?.trim()) {
-			baseUrl = modelBaseUrl;
 		}
 	}
 	if (model.provider === "xai" || model.provider === "xai-oauth") {

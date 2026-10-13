@@ -57,7 +57,6 @@ import { normalizeCharmHyperBaseUrl } from "../wire/charm-hyper";
 import { CLINEPASS_API_BASE_URL, clinePassClientHeaders } from "../wire/cline-pass";
 import { CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL } from "../wire/cloudflare-ai-gateway";
 import { coreWeaveProjectHeaders } from "../wire/coreweave";
-import { configuredMunitoBaseUrl, normalizeMunitoBaseUrl } from "../wire/munito";
 import {
 	COPILOT_API_HEADERS,
 	COPILOT_DISCOVERY_HEADERS,
@@ -5518,10 +5517,6 @@ export function stepfunModelManagerOptions(
 // 16.10 Munito
 // ---------------------------------------------------------------------------
 
-/**
- * Munito discovery config: API key plus base-URL and fetch overrides, for
- * {@link munitoModelManagerOptions} and direct/extension construction.
- */
 export interface MunitoModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -5529,7 +5524,7 @@ export interface MunitoModelManagerConfig {
 }
 
 /**
- * Chat models only: Munito's OCR SKUs are excluded via `runtime/behavior.kdl`
+ * Chat models only: OCR SKUs are excluded via `runtime/behavior.kdl`
  * (`exclude-models provider="munito"`).
  */
 export function isMunitoChatModelId(id: string): boolean {
@@ -5540,38 +5535,63 @@ export function isMunitoChatModelId(id: string): boolean {
 	return !isExcludedModel("munito", normalized);
 }
 
-/** `config.baseUrl` > `MUNITO_BASE_URL` > global host, normalized. */
-export function resolveMunitoBaseUrl(config?: { baseUrl?: string }): string {
-	return normalizeMunitoBaseUrl(configuredMunitoBaseUrl(config?.baseUrl) ?? Bun.env.MUNITO_BASE_URL);
+/**
+ * Munito reference recovery: Munito's `/models` rows carry only
+ * `id`/`owned_by`. An id bundled on Munito hydrates through
+ * {@link mapWithBundledReference}; anything else recovers intrinsic
+ * capabilities (context window, output limit, reasoning, modalities) from the
+ * bundled canonical reference index (`recover-canonical-params "munito"`).
+ * Thinking stays unset: ladders are host policy, and an inherited reference
+ * ladder would win `resolveThinkingPolicy` and defeat Munito's authored
+ * thinking rules, so the provider KDL owns the effort ladder and wire
+ * dialect. Identity, pricing, and compat are never borrowed: Munito
+ * publishes no per-model tariff, so pricing stays zeroed.
+ */
+export function mapMunitoReferenceModel<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	if (reference) {
+		return mapWithBundledReference(entry, defaults, reference);
+	}
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as ModelSpec<TApi> | undefined;
+	if (!canonical) {
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	}
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		contextWindow,
+		maxTokens,
+	};
 }
+
+const MUNITO_GLOBAL_BASE_URL = "https://api.munito.ai/inference/v1";
 
 /**
  * Munito model-manager options. `/models` is public (invalid keys still 401),
  * so discovery runs keyless; the key gates inference, not the roster probe.
- * A successful snapshot is authoritative over the bundled seed rows. The
- * regional endpoint from `config.baseUrl` or `MUNITO_BASE_URL` covers
- * discovery and cache identity; bundled rows stay on the global host and are
- * redirected at inference in `packages/ai/src/providers/openai-shared.ts`.
- * The endpoint is written back into `config.baseUrl` because discovery
- * requests `<baseUrl>/models` verbatim.
+ * A successful snapshot is authoritative over the bundled seed rows.
  */
 export function munitoModelManagerOptions(
 	config?: MunitoModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	const configuredEndpoint =
-		configuredMunitoBaseUrl(config?.baseUrl) ?? configuredMunitoBaseUrl(Bun.env.MUNITO_BASE_URL);
-	const baseEndpoint = normalizeMunitoBaseUrl(config?.baseUrl ?? Bun.env.MUNITO_BASE_URL);
 	return createOpenAICompatibleModelManagerOptions({
 		api: "openai-completions",
 		providerId: "munito",
-		defaultBaseUrl: baseEndpoint,
-		config: configuredEndpoint === undefined ? config : { ...config, baseUrl: configuredEndpoint },
-		// Namespace keyed on the endpoint: a region switch must not serve the
-		// previous region's warm cache.
-		cacheProviderId: resolveModelCacheProviderId("munito", { baseUrl: configuredEndpoint ?? baseEndpoint }),
+		defaultBaseUrl: MUNITO_GLOBAL_BASE_URL,
+		config,
 		dynamicModelsAuthoritative: true,
 		filterModel: (_entry, model) => isMunitoChatModelId(model.id),
-		mapModel: mapCanonicalReferenceModel,
+		mapModel: mapMunitoReferenceModel,
 	});
 }
 

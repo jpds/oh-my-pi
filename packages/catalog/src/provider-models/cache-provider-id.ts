@@ -1,7 +1,6 @@
 import { CHARM_HYPER_API_BASE_URL, normalizeCharmHyperBaseUrl } from "../wire/charm-hyper";
 import { CODEX_BASE_URL, CODEX_CLIENT_VERSION } from "../wire/codex";
 import { CURSOR_DEFAULT_BASE_URL } from "../wire/cursor";
-import { MUNITO_GLOBAL_BASE_URL, normalizeMunitoBaseUrl } from "../wire/munito";
 import { type AccountScope, factoryDroidModelCacheProviderId } from "../wire/factory-droid";
 import { PERSONAL_GITHUB_COPILOT_BASE_URL } from "../wire/github-copilot";
 import {
@@ -177,14 +176,6 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 			// models-v1 moves rows enriched before cross-provider reference
 			// isolation out of the legacy bare-provider namespaces (#10932).
 			return `${providerId}:models-v1`;
-		case "munito": {
-			// The namespace follows the endpoint, so a warm EU cache cannot
-			// serve a later switch to the US host.
-			const baseUrl = normalizeMunitoBaseUrl(options.baseUrl);
-			return baseUrl === MUNITO_GLOBAL_BASE_URL
-				? "munito:models-v1"
-				: `munito:models-v1:${Bun.hash(baseUrl).toString(36)}`;
-		}
 		case "opencode-go":
 		case "opencode-zen": {
 			// v3: gateway-first rows cached before stencil enrichment carry null

@@ -6,7 +6,7 @@
 
 - Added `tui.scaleGaugeToCompaction` (Appearance → Display, "Scale Context Usage To Compaction"): the context gauge — in both the status line and the `/context` panel — fills toward the auto-compaction cutoff instead of the full context window; percentages run to 100% at the cutoff, the `/context` headline reads `current/cutoff/total tokens` with a cutoff-side percent first (e.g. `108K/280K/1m tokens (38.4%/10.3%)`), and the reserved past-cutoff space grays out as unusable. Values saved under the earlier `statusLine.scaleGaugeToCompaction` id (prototype deploys) migrate automatically.
 - Added the `PI_CONFIG_DECLARATIVE_FILES` declarative settings layer (also `configDeclarativeFiles` on `Settings.init`): config files that load below the global config, so a deployment image can declare values the agent still overrides in-session. The settings panel shows those values in a colour of their own, rather than the colour it uses for settings you changed yourself.
-- Added Munito as a `/login` API-key provider (`MUNITO_API_KEY`, regional hosts via `MUNITO_BASE_URL`) ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
+- Added Munito as a `/login` API-key provider (`MUNITO_API_KEY`) ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
 - Added per-model (and provider-level) `judgment` overrides (`route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) so `typesafe`-family models can answer System One judgments on compatible endpoints such as the Vercel AI Gateway's `/v1/evaluate` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
 - Eval kernels reach host-mediated helpers without the tool bridge: the Python runner forwards `judge`, `judge_batch`, `completion()`, `agent()`, `tool.*`, and the other helpers to the host over its stdio control channel, so they work in sandboxes that refuse loopback TCP and no provider credential ever enters the kernel process.
 - `PI_NO_TOOL_BRIDGE=1` skips the eval HTTP tool bridge (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers then run over the runner's stdio channel instead of failing with a typed error.
@@ -625,6 +625,10 @@
 - Fixed browser `uploadFile` in Chrome reporting success with no file attached when the element opens no file chooser and nothing on the page reads the dropped files; it now fails and says what to target ([#15919](https://github.com/can1357/oh-my-pi/pull/15919) by [@will-bogusz](https://github.com/will-bogusz))
 - Relay mode: when Chrome detaches omp from a tab it drives (a password manager's inline menu loading in the page), the call fails at once saying why and omp reattaches to the same tab, instead of every later call timing out and reopening failing with `No page targets available` ([#15920](https://github.com/can1357/oh-my-pi/pull/15920) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the macOS `computer` tool letting the display sleep and lock in a turn that went 5 minutes without a desktop action; it now keeps the display awake until the turn ends or asks for your answer, then lets it sleep ([#15762](https://github.com/can1357/oh-my-pi/pull/15762) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Added
+
+- Added Munito as a `/login` API-key provider (`MUNITO_API_KEY`) ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
 
 ## [18.11.1] - 2026-10-15
 

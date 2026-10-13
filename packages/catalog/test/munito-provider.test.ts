@@ -7,28 +7,14 @@ import { resolveModelReference } from "@oh-my-pi/pi-catalog/identity/reference";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
+import { providerEntry, seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
-import {
-	isMunitoChatModelId,
-	munitoModelManagerOptions,
-	resolveMunitoBaseUrl,
-} from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import { isMunitoChatModelId, munitoModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
-
-const ORIGINAL_MUNITO_BASE_URL = Bun.env.MUNITO_BASE_URL;
-
-function restoreMunitoBaseUrl(): void {
-	if (ORIGINAL_MUNITO_BASE_URL === undefined) {
-		delete Bun.env.MUNITO_BASE_URL;
-		return;
-	}
-	Bun.env.MUNITO_BASE_URL = ORIGINAL_MUNITO_BASE_URL;
-}
+import { bundledSeedRows } from "../scripts/generate-models";
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	restoreMunitoBaseUrl();
 });
 
 /** Munito's public chat roster as probed on 2026-10-12 (OCR ids interleaved). */
@@ -159,9 +145,8 @@ describe("Munito provider support", () => {
 	test("a retired model is pruned through the manager options, not just the descriptor", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-munito-prune-"));
 		const dbPath = path.join(tempDir, "models.db");
-		// Discovery is authoritative: a bundled-only id must disappear even when
-		// the live roster serves its neighbors. Synthesized seed rows keep the
-		// assertion independent of catalog regen.
+		// A bundled-only id must disappear when the live roster serves its
+		// neighbors; synthesized seed rows decouple the assertion from regen.
 		const bundled: ModelSpec<"openai-completions">[] = ["qwen/qwen3.8-27b", "munito/retired-chat-1"].map(id => ({
 			id,
 			name: id,
@@ -205,112 +190,53 @@ describe("Munito provider support", () => {
 		}
 	});
 
-	test("MUNITO_BASE_URL redirects discovery to the regional endpoint", async () => {
-		Bun.env.MUNITO_BASE_URL = "https://api.eu.munito.ai/inference/v1";
-		const seen: { url?: string } = {};
-		await munitoModelManagerOptions({
-			apiKey: "munito-key",
-			fetch: munitoModelsFetch(seen),
-		}).fetchDynamicModels?.();
-		expect(seen.url).toBe("https://api.eu.munito.ai/inference/v1/models");
+	test("generation bundles the seed rows only when discovery cannot reach /models", () => {
+		// The generator, not the seed KDL, decides whether a regen without a live
+		// roster carries the declared default into models.json.
+		const entry = providerEntry("munito");
+		expect(entry?.defaultModel).toBe("qwen/qwen3.8-27b");
+		if (!entry) throw new Error("munito provider entry missing");
+
+		const fallback = bundledSeedRows(entry, [], new Set<string>());
+		expect(fallback.map(model => model.id)).toContain(entry.defaultModel);
+
+		// Authoritative discovery replaces the fallback, so retired ids do not
+		// linger as bundled rows.
+		expect(bundledSeedRows(entry, [], new Set(["munito"]))).toEqual([]);
 	});
 
-	test("a bare regional host normalizes to the inference path", async () => {
-		Bun.env.MUNITO_BASE_URL = "api.us.munito.ai";
-		const seen: { url?: string } = {};
-		await munitoModelManagerOptions({
-			apiKey: "munito-key",
-			fetch: munitoModelsFetch(seen),
-		}).fetchDynamicModels?.();
-		expect(seen.url).toBe("https://api.us.munito.ai/inference/v1/models");
-		expect(resolveMunitoBaseUrl()).toBe("https://api.us.munito.ai/inference/v1");
-	});
-
-	test("explicit config.baseUrl wins over the environment variable", () => {
-		Bun.env.MUNITO_BASE_URL = "https://api.eu.munito.ai/inference/v1";
-		expect(resolveMunitoBaseUrl({ baseUrl: "https://api.us.munito.ai/inference/v1" })).toBe(
-			"https://api.us.munito.ai/inference/v1",
-		);
-		expect(resolveMunitoBaseUrl()).toBe("https://api.eu.munito.ai/inference/v1");
-	});
-
-	test("an unsuffixed config.baseUrl still probes the regional /inference/v1/models path", async () => {
-		Bun.env.MUNITO_BASE_URL = "https://api.eu.munito.ai/inference/v1";
-		const seen: { url?: string } = {};
-		await munitoModelManagerOptions({
-			apiKey: "munito-key",
-			baseUrl: "api.us.munito.ai",
-			fetch: munitoModelsFetch(seen),
-		}).fetchDynamicModels?.();
-		expect(seen.url).toBe("https://api.us.munito.ai/inference/v1/models");
-	});
-
-	test("an unset variable falls back to the global host", () => {
-		delete Bun.env.MUNITO_BASE_URL;
-		const seen: { url?: string } = {};
-		return munitoModelManagerOptions({
-			apiKey: "munito-key",
-			fetch: munitoModelsFetch(seen),
-		})
-			.fetchDynamicModels?.()
-			.then(() => {
-				expect(seen.url).toBe("https://api.munito.ai/inference/v1/models");
-			});
-	});
-
-	test("a warm cache is not served after the region changes", async () => {
-		// EU-cached rows carry the EU baseUrl; serving them to the US host
-		// would pin inference there for the TTL.
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-munito-cache-"));
-		const dbPath = path.join(tempDir, "models.db");
+	test("the bundled fallback keeps the declared default selectable before discovery", async () => {
+		// Offline startup composes the bundled rows (getBundledModels) instead of
+		// the KDL seed: if generation stops carrying the seed, the declared
+		// defaultModel is unresolvable at boot, before discovery fires.
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-munito-fallback-"));
 		try {
-			Bun.env.MUNITO_BASE_URL = "https://api.eu.munito.ai/inference/v1";
-			const euOptions = {
-				...munitoModelManagerOptions({ apiKey: "k", fetch: munitoModelsFetch() }),
-				cacheDbPath: dbPath,
-			};
-			const eu = await resolveProviderModels(euOptions, "online");
-			expect(eu.models.every(model => model.baseUrl === "https://api.eu.munito.ai/inference/v1")).toBe(true);
+			const defaultModel = providerEntry("munito")?.defaultModel;
+			if (!defaultModel) throw new Error("munito default model missing");
+			const result = await resolveProviderModels(
+				{
+					...munitoModelManagerOptions({ apiKey: "munito-key" }),
+					cacheDbPath: path.join(tempDir, "models.db"),
+				},
+				"offline",
+			);
 
-			Bun.env.MUNITO_BASE_URL = "https://api.us.munito.ai/inference/v1";
-			const usOptions = {
-				...munitoModelManagerOptions({ apiKey: "k", fetch: munitoModelsFetch() }),
-				cacheDbPath: dbPath,
-			};
-			const us = await resolveProviderModels(usOptions, "online-if-uncached");
-			expect(us.source).toBe("provider");
-			expect(us.models.every(model => model.baseUrl === "https://api.us.munito.ai/inference/v1")).toBe(true);
+			const row = result.models.find(model => model.id === defaultModel);
+			expect(row).toBeDefined();
+			expect(row?.provider).toBe("munito");
+			expect(row?.api).toBe("openai-completions");
+			expect(row?.baseUrl).toBe("https://api.munito.ai/inference/v1");
+			expect(row?.reasoning).toBe(true);
+			// Munito publishes no per-model tariff: the fallback row stays free.
+			expect(row?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+
+			// The discovery-hydration correction survives composition too.
+			const gemma = result.models.find(model => model.id === "google/gemma-4-12b");
+			expect(gemma?.reasoning).toBe(true);
+			expect(gemma?.thinking).toBeUndefined();
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
-	});
-
-	test("discovered rows carry the regional endpoint, not the bundled global host", async () => {
-		Bun.env.MUNITO_BASE_URL = "https://api.us.munito.ai/inference/v1";
-		const models = await munitoModelManagerOptions({
-			apiKey: "munito-key",
-			fetch: munitoModelsFetch(),
-		}).fetchDynamicModels?.();
-		expect(models?.length).toBeGreaterThan(0);
-		for (const model of models ?? []) {
-			expect(model.baseUrl).toBe("https://api.us.munito.ai/inference/v1");
-		}
-	});
-
-	test("the authored seed covers the provider's default model on the global host", () => {
-		// Without the seed, a regen that cannot reach /models leaves the declared
-		// defaultModel unresolvable at boot, before discovery fires.
-		const seed = seedModels<"openai-completions">("munito");
-		expect(seed.map(model => model.id)).toEqual(["qwen/qwen3.8-27b", "google/gemma-4-12b"]);
-		const [qwenRow, gemmaRow] = seed;
-		expect(qwenRow.provider).toBe("munito");
-		expect(qwenRow.api).toBe("openai-completions");
-		expect(qwenRow.baseUrl).toBe("https://api.munito.ai/inference/v1");
-		expect(qwenRow.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-		expect(qwenRow.reasoning).toBe(true);
-		// The discovery-hydration correction: always-on reasoning, no ladder.
-		expect(gemmaRow.reasoning).toBe(true);
-		expect(gemmaRow.thinking).toBeUndefined();
 	});
 
 	test("roster exclusion classifies Munito's OCR SKUs without touching chat ids", () => {

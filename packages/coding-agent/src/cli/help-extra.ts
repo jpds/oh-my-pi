@@ -41,7 +41,6 @@ export function getExtraHelpText(): string {
   STEPFUN_API_KEY            - StepFun Step models
   HELMCODE_API_KEY           - Helmcode private EU inference
   MUNITO_API_KEY             - Munito models
-  MUNITO_BASE_URL            - Munito regional endpoint (full URL or bare host, e.g. api.eu.munito.ai)
   WAFER_SERVERLESS_API_KEY   - Wafer Serverless (pay-as-you-go)
   YOLO_AUTO_API_KEY          - Yolo-Auto flat-rate Qwen models
   SINGULARITYAPI_DEV_API_KEY - SingularityAPI universal gateway (300+ models)

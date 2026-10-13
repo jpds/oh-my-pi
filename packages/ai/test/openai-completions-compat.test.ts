@@ -2848,6 +2848,21 @@ describe("mistral prompt_cache_key regression (#15079)", () => {
 	});
 });
 
+describe("munito prompt_cache_key", () => {
+	const munito = getBundledModel<"openai-completions">("munito", "qwen/qwen3.8-27b");
+
+	it("sends the session-stable prompt_cache_key the routing cache reads", async () => {
+		expect(munito.compat.supportsPromptCacheKey).toBe(true);
+		// Munito caches implicitly: marker fields are outside the tier's
+		// whitelist, so requesting breakpoints would 400.
+		expect(munito.compat.supportsPromptCacheBreakpoints).toBe(false);
+		const payload = toObject(
+			await captureOpenAICompletionsPayload(munito, undefined, { sessionId: "munito-cache-session" }),
+		);
+		expect(payload?.prompt_cache_key).toBe("munito-cache-session");
+	});
+});
+
 describe("Groq Qwen reasoning_effort on the wire", () => {
 	it("sends each Qwen only an effort value Groq accepts", async () => {
 		// Qwen 3.6 takes `default` (thinking) or `none`; Qwen 3.8 takes low/medium/high.
