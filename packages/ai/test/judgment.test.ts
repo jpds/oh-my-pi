@@ -704,7 +704,7 @@ describe("NativeJudge", () => {
 	});
 
 	it("allows custom non-reserved typeField names", () => {
-		for (const key of ["type", "kind", "discriminator", "choice", "noul", "score"]) {
+		for (const key of ["type", "kind", "discriminator"]) {
 			expect(
 				() =>
 					new NativeJudge({
@@ -713,6 +713,56 @@ describe("NativeJudge", () => {
 					}),
 			).not.toThrow();
 		}
+		for (const key of ["choice", "noul", "score"] as const) {
+			expect(
+				() =>
+					new NativeJudge({
+						apiKey: "k",
+						judgment: { typeField: key, valueMap: { [key]: "value" } },
+					}),
+			).not.toThrow();
+		}
+	});
+
+	it("requires valueMap pairing when typeField names a canonical answer key", () => {
+		expect(
+			() =>
+				new NativeJudge({
+					apiKey: "k",
+					judgment: { typeField: "choice" },
+				}),
+		).toThrow(ConfigurationError);
+		expect(
+			() =>
+				new NativeJudge({
+					apiKey: "k",
+					judgment: { typeField: "choice", valueMap: { choice: "value" } },
+				}),
+		).not.toThrow();
+
+		for (const key of ["choice", "noul", "score"] as const) {
+			expect(
+				() =>
+					new NativeJudge({
+						apiKey: "k",
+						judgment: { typeField: key },
+					}),
+			).toThrow(ConfigurationError);
+			expect(
+				() =>
+					new NativeJudge({
+						apiKey: "k",
+						judgment: { typeField: key, valueMap: { [key]: "value" } },
+					}),
+			).not.toThrow();
+		}
+		expect(
+			() =>
+				new NativeJudge({
+					apiKey: "k",
+					judgment: { typeField: "choice", valueMap: { noul: "value" } },
+				}),
+		).toThrow(ConfigurationError);
 	});
 
 	it("surfaces validation errors without retrying and rejects answers of the wrong type", async () => {

@@ -1144,6 +1144,7 @@ function appendUnbundledSeedModels<TApi extends Api = Api>(
 	discovered: readonly ModelSpec<TApi>[] | null,
 ): readonly ModelSpec<TApi>[] | null {
 	if (!discovered) return null;
+	if (discovered.length === 0) return discovered;
 	const known = new Set(getBundledModels(providerId).map(model => model.id));
 	for (const model of discovered) known.add(model.id);
 	const seeds = seedModels<TApi>(providerId).filter(seed => !known.has(seed.id));

@@ -67,6 +67,11 @@ export function finiteNumber(value: unknown): number | undefined {
 
 const RESERVED_VALUE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const RESERVED_TYPE_FIELDS = new Set(["instructions", "criteria", ...RESERVED_VALUE_KEYS]);
+const CANONICAL_ANSWER_KEYS = new Set(["choice", "noul", "score"]);
+
+function isCanonicalAnswerKey(key: string): key is "choice" | "noul" | "score" {
+	return CANONICAL_ANSWER_KEYS.has(key);
+}
 
 /**
  * Decorate a path-based System One wire (typesafe/openrouter-decisions)
@@ -101,6 +106,11 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				);
 			}
 		}
+	}
+	if (isCanonicalAnswerKey(typeField) && !valueMap?.[typeField]) {
+		throw new AIError.ConfigurationError(
+			`judgment.typeField "${typeField}" requires a matching judgment.valueMap["${typeField}"] pairing`,
+		);
 	}
 	if (route === undefined && typeField === "type" && !typeMap && !valueMap && !usageMap) {
 		return inner;

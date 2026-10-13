@@ -361,4 +361,29 @@ describe("Vercel AI Gateway provider", () => {
 			usageMap: { input: "inputTokens", output: "outputTokens" },
 		});
 	});
+
+	test("preserves transient empty discovery without appending seeds, leaving cache non-authoritative", async () => {
+		const options = vercelAiGatewayModelManagerOptions({
+			fetch: mockModelsList([]),
+		});
+
+		const models = await options.fetchDynamicModels?.();
+		expect(models).toEqual([]);
+
+		await using tempDir = await TempDir.create("@pi-catalog-vercel-cache-");
+		const cacheDbPath = tempDir.join("models.db");
+
+		const result = await resolveProviderModels(
+			{
+				...options,
+				cacheDbPath,
+			},
+			"online",
+		);
+
+		expect(result.source).toBe("provider");
+		const cached = readModelCache("vercel-ai-gateway", Number.POSITIVE_INFINITY, Date.now, cacheDbPath);
+		expect(cached).toBeDefined();
+		expect(cached?.authoritative).toBe(false);
+	});
 });
