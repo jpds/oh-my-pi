@@ -171,8 +171,8 @@ Loading models.yml checks a `modelOverrides` `kind` only against an api the file
 
 `judgment` (provider level, per model, or `modelOverrides`) retargets a
 `typesafe`-family model at a System One–compatible endpoint without a new
-`api` value. Provider-level settings are the baseline; per-model keys
-override them (`typeMap`, `valueMap`, and `usageMap` merge key-wise).
+`api` value. Provider-level settings are the baseline; per-model overrides
+replace each key wholesale (map values are not merged key-wise).
 Supported keys:
 
 - `route` — path appended to `baseUrl` (must start with `/`), e.g. `/v1/evaluate`.
@@ -190,11 +190,21 @@ Supported keys:
   (e.g. Vercel's `providerMetadata.gateway.*`) are out of scope — cost then
   reprices from the catalog as usual.
 
-Vercel AI Gateway worked example (boolean judgments on `/v1/evaluate`).
-Discovery maps the gateway's `type: "evaluation"` rows (e.g.
-`vercel-ai-gateway/typesafe-ai/jev`) to `api: typesafe` judge models, and the
-provider's catalog rules supply the `/v1/evaluate` judgment defaults, so the
-discovered id works with no config:
+### Vercel AI Gateway evaluation models
+
+Discovery maps Vercel AI Gateway `type: "evaluation"` rows to `api: typesafe`
+judge models routing to `/v1/evaluate`. The six ids (`convaiinnovations/laya`,
+`convaiinnovations/laya-free`, `liquid/d1`, `microsoft/microsoft-decision-1`,
+`openai/gpt-6-luna-decisions`, `typesafe-ai/jev`) come from the public
+`/v1/models`; the seeded bundles are documented above.
+
+The discovery mapper carries upstream fields only; the ai judgment decorator
+applies the KDL contract (`typeMap {noul: boolean}`, `valueMap
+{noul: probability}`, camelCase `usageMap`). `choice` and `score` questions
+are sent canonical and answered natively (verified live against
+`/v1/evaluate`). Cost reprices from the catalog because Vercel reports billed
+cost at `providerMetadata.gateway.cost` (outside usage). The discovered id
+works with no config:
 
 ```yaml
 providers:
@@ -202,15 +212,10 @@ providers:
     apiKey: VERCEL_API_KEY
 ```
 
-The model posts to `https://ai-gateway.vercel.sh/v1/evaluate` with `boolean` question types;
-`{type: boolean, probability: 0.9}` answers normalize to
+The model posts to `https://ai-gateway.vercel.sh/v1/evaluate` with `boolean`
+question types; `{type: boolean, probability: 0.9}` answers normalize to
 `{type: noul, noul: 0.9}`, and camelCase usage is read from `inputTokens` /
-`outputTokens`. The catalog `typeMap`/`valueMap` cover `noul` only
-(`boolean`/`probability`); `choice` and `score` questions go out — and come
-back — with their canonical types and keys, which the gateway answers
-natively (verified live against `/v1/evaluate`). Billed cost is reported in
-`providerMetadata.gateway.*`, outside the usage object, so cost always
-reprices from the catalog. To override the catalog defaults (e.g. a custom judgment
+`outputTokens`. To override the catalog defaults (e.g. a custom judgment
 route), set `judgment` on a `modelOverrides` entry:
 
 ```yaml
@@ -275,7 +280,7 @@ modelRoles:
 - `discovery.injectV1`: optional boolean, default `true`, for `openai-models-list`. Set `false` to fetch the model list from `{baseUrl}/models` without injecting `/v1` — for gateways that root their OpenAI-compatible surface at a versioned path (e.g. `https://api.opper.ai/v3/compat`) where the forced `/v1/models` returns a different, smaller model list. Query strings in `baseUrl` are ignored, matching the default mode.
 - `transport`: `pi-native` only. When set, every model under that provider is sent to an `omp auth-gateway` compatible `baseUrl` via `POST /v1/pi/stream`; `apiKey` is the gateway bearer.
 - `imageInputDecoder`: `stb` only. Set this on a custom model or `modelOverrides` entry when the serving backend uses an STB-compatible image decoder that cannot accept WebP; OMP converts attached and historical WebP images before provider dispatch.
-- `tokenizer`: opt into a specific embedded local tokenizer when a proxy's model id is ambiguous or noncanonical. Allowed values: `claude-v3`, `claude-v47`, `claude-v5`, `claude-v5-sonnet`, `qwen3`, `deepseek-v3`, `kimi-k2`, and `glm5`. Omit it to use catalog identity policy; unknown models retain the fast local estimate.
+- `tokenizer`: opt into a specific embedded local tokenizer when a proxy's model id is ambiguous or noncanonical. Allowed values: `claude-v3`, `claude-v47`, `claude-v5`, `claude-v5-sonnet`, `qwen3`, `deepseek-v3`, `kimi-k2`, `glm5`, and `o200k` (OpenAI GPT-5 and later). Omit it to use catalog identity policy; unknown models retain the fast local estimate.
 
 ## Validation rules (current)
 
