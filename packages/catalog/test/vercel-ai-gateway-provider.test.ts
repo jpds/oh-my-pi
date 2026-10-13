@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
@@ -385,5 +386,38 @@ describe("Vercel AI Gateway provider", () => {
 		const cached = readModelCache("vercel-ai-gateway", Number.POSITIVE_INFINITY, Date.now, cacheDbPath);
 		expect(cached).toBeDefined();
 		expect(cached?.authoritative).toBe(false);
+	});
+
+	test("drops stale judgment policy on api-switched rebuild", () => {
+		const evalSpec = {
+			id: "typesafe-ai/jev",
+			name: "Jev",
+			provider: "vercel-ai-gateway",
+			api: "typesafe" as const,
+			reasoning: false,
+			input: ["text" as const],
+			cost: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 32_000,
+			maxTokens: 8192,
+		};
+		const built = buildModel(evalSpec);
+		expect(built.judgment).toEqual({
+			route: "/v1/evaluate",
+			typeMap: { noul: "boolean" },
+			valueMap: { noul: "probability" },
+			usageMap: { input: "inputTokens", output: "outputTokens" },
+		});
+
+		const rebuiltAnthropic = buildModel({
+			...toModelSpec(built),
+			api: "anthropic-messages",
+		});
+		expect(rebuiltAnthropic.judgment).toBeUndefined();
+
+		const rebuiltOpenRouter = buildModel({
+			...toModelSpec(built),
+			api: "openrouter-decisions",
+		});
+		expect(rebuiltOpenRouter.judgment).toBeUndefined();
 	});
 });

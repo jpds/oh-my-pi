@@ -711,25 +711,30 @@ describe("NativeJudge", () => {
 		}
 	});
 
-	it("allows custom non-reserved typeField names", () => {
-		for (const key of ["type", "kind", "discriminator"]) {
-			expect(
-				() =>
-					new NativeJudge({
-						apiKey: "k",
-						judgment: { typeField: key },
-					}),
-			).not.toThrow();
-		}
-		for (const key of ["choice", "noul", "score"] as const) {
-			expect(
-				() =>
-					new NativeJudge({
-						apiKey: "k",
-						judgment: { typeField: key, valueMap: { [key]: "value" } },
-					}),
-			).not.toThrow();
-		}
+	it("allows custom non-reserved typeField names", async () => {
+		const calls: { init: RequestInit | undefined }[] = [];
+		const judge = new NativeJudge({
+			apiKey: "k",
+			baseUrl: "https://bifrost.example",
+			model: "judge-model",
+			judgment: { typeField: "discriminator" },
+			fetch: async (_url, init) => {
+				calls.push({ init });
+				return Response.json({
+					model: "judge-model",
+					answers: { urgent: { discriminator: "noul", noul: 0.75 } },
+					usage: {},
+				});
+			},
+		});
+
+		const result = await judge.judge(request);
+
+		expect(calls).toHaveLength(1);
+		const sent = JSON.parse(String(calls[0].init?.body));
+		expect(sent.questions.urgent.discriminator).toBe("noul");
+		expect(sent.questions.urgent.type).toBeUndefined();
+		expect(result.answers.urgent).toEqual({ type: "noul", noul: 0.75 });
 	});
 
 	it("requires valueMap pairing when typeField names a canonical answer key", () => {

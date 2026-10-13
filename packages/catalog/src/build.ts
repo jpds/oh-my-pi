@@ -53,7 +53,8 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
 /**
  * Narrow a compiled `judgment` axis value to a JudgmentConfig. Unknown keys
  * are ignored; `undefined` (absent, non-object, or no recognized field)
- * leaves the spec value in place.
+ * makes the caller drop any spec value, so stale policy cannot survive
+ * an api-switched rebuild.
  */
 function judgmentConfig(value: unknown): JudgmentConfig | undefined {
 	const payload = objectPayload(value);
@@ -108,6 +109,8 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 			...((judgment.valueMap ?? prior?.valueMap) ? { valueMap: { ...judgment.valueMap, ...prior?.valueMap } } : {}),
 			...((judgment.usageMap ?? prior?.usageMap) ? { usageMap: { ...judgment.usageMap, ...prior?.usageMap } } : {}),
 		};
+	} else {
+		delete model.judgment;
 	}
 	if (catalog.contextWindowAuthoritative === true) {
 		model.contextWindowAuthoritative = true;
