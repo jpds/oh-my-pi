@@ -4101,21 +4101,31 @@ export function vercelAiGatewayModelManagerOptions(
 	return {
 		...options,
 		fetchDynamicModels: async () => {
-			const discovered = await fetchDiscovered();
-			const models = appendUnbundledSeedModels<"anthropic-messages" | "typesafe">("vercel-ai-gateway", discovered);
-			if (!models) return null;
-			const discoveredCount = discovered?.length ?? 0;
-			return models.map((model, index): ModelSpec<"anthropic-messages" | "typesafe"> => {
-				if (index < discoveredCount) return model;
-				const shouldRebase = model.baseUrl === DEFAULT_VERCEL_AI_GATEWAY_BASE_URL;
-				return {
-					...model,
-					...(model.api === "typesafe" ? { kind: "judge" as const } : {}),
-					baseUrl: shouldRebase ? baseUrl : model.baseUrl,
-				};
-			});
+			// Discovery rows already carry `baseUrl` from mapModel; appended seed
+			// rows are rebased by `appendVercelGatewaySeeds` so a proxied
+			// consumer never sends its credential to the public gateway.
+			return appendVercelGatewaySeeds(await fetchDiscovered(), baseUrl);
 		},
 	};
+}
+
+/**
+ * Append every authored seed row discovery did not return and rebase it onto
+ * `baseUrl`: Vercel's judge seeds are the provider's live System One surface,
+ * so a proxied consumer must reach them through its own host instead of the
+ * public gateway the seed's catalog base names. Empty discovery stays empty —
+ * a transient outage must keep the cache non-authoritative, not seed it.
+ */
+function appendVercelGatewaySeeds<TApi extends Api>(
+	discovered: readonly ModelSpec<TApi>[] | null,
+	baseUrl: string,
+): readonly ModelSpec<TApi>[] | null {
+	if (discovered === null || discovered.length === 0) return discovered;
+	const foundIds = new Set(discovered.map(model => model.id));
+	const appended = seedModels<TApi>("vercel-ai-gateway")
+		.filter(seed => !foundIds.has(seed.id))
+		.map(seed => ({ ...seed, baseUrl }));
+	return appended.length === 0 ? discovered : [...discovered, ...appended];
 }
 
 // ---------------------------------------------------------------------------

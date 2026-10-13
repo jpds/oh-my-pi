@@ -94,12 +94,6 @@ export interface NativeJudgeOptions extends NativeJudgeConnection {
 	 * requests are split. Unset: no cap.
 	 */
 	maxQuestions?: number;
-	/**
-	 * Per-model judgment endpoint overrides (route, type/value key maps, usage
-	 * keys). Only System One dialects accept them; the API's own dialect is used
-	 * verbatim when absent.
-	 */
-	judgment?: JudgmentConfig;
 }
 
 /** Per-call options for {@link NativeJudge.judge}. */

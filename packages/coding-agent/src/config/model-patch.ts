@@ -270,8 +270,22 @@ export function mergeJudgmentConfig(
 	// Clone on the pass-through paths too: every model's maps must own their
 	// objects, or a future in-place mutation corrupts siblings sharing the
 	// provider baseline.
-	if (!base) return override ? { ...override, ...(override.typeMap ? { typeMap: { ...override.typeMap } } : {}), ...(override.valueMap ? { valueMap: { ...override.valueMap } } : {}), ...(override.usageMap ? { usageMap: { ...override.usageMap } } : {}) } : undefined;
-	if (!override) return { ...base, ...(base.typeMap ? { typeMap: { ...base.typeMap } } : {}), ...(base.valueMap ? { valueMap: { ...base.valueMap } } : {}), ...(base.usageMap ? { usageMap: { ...base.usageMap } } : {}) };
+	if (!base)
+		return override
+			? {
+					...override,
+					...(override.typeMap ? { typeMap: { ...override.typeMap } } : {}),
+					...(override.valueMap ? { valueMap: { ...override.valueMap } } : {}),
+					...(override.usageMap ? { usageMap: { ...override.usageMap } } : {}),
+				}
+			: undefined;
+	if (!override)
+		return {
+			...base,
+			...(base.typeMap ? { typeMap: { ...base.typeMap } } : {}),
+			...(base.valueMap ? { valueMap: { ...base.valueMap } } : {}),
+			...(base.usageMap ? { usageMap: { ...base.usageMap } } : {}),
+		};
 	return {
 		...base,
 		...override,

@@ -340,7 +340,10 @@ export class ChainJudge implements Judge {
 		if (model.judgment !== undefined && !isJudgmentApi(model.api)) {
 			// A `judgment:` override on a non-judgment API never constructs a
 			// NativeJudge — warn once instead of silently ignoring it.
-			logger.warn(`Judge model ${model.provider}/${model.id} carries a judgment override but api ${model.api} is not a judgment API; ignoring`, { provider: model.provider, id: model.id });
+			logger.warn(
+				`Judge model ${model.provider}/${model.id} carries a judgment override but api ${model.api} is not a judgment API; ignoring`,
+				{ provider: model.provider, id: model.id },
+			);
 		}
 		if (isJudgmentApi(model.api)) {
 			const headers = await this.#deps.registry.resolveModelHeaders(model, signal);

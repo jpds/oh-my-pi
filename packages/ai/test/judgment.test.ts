@@ -538,7 +538,9 @@ describe("NativeJudge", () => {
 			},
 		});
 
-		expect(result.answers.pick).toEqual({ type: "choice", choice: "yes" });
+		// The endpoint echoes its own wire shape: `type` (the discriminator it
+		// renames) came back under the answer key, `value` from valueMap.
+		expect(result.answers.pick).toEqual({ type: "choice", choice: "yes" } as never);
 	});
 
 	it("rejects valueMap values naming reserved keys", () => {
