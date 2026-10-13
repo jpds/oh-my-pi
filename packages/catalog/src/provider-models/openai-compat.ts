@@ -593,6 +593,49 @@ function nanoGptPricingCost(pricing: unknown, fallback: TokenCost): TokenCost {
 	};
 }
 
+/**
+ * Canonical-reference recovery for resellers whose `/models` rows carry only
+ * `id`/`owned_by`: an id bundled on the discovering provider hydrates through
+ * {@link mapWithBundledReference}; anything else recovers intrinsic
+ * capabilities (context window, output limit, reasoning, modalities) from the
+ * bundled canonical reference index (`recover-canonical-params` providers).
+ * Thinking is host policy, so the reference's ladder is never copied:
+ * provider KDL owns the effort ladder and wire dialect. Identity, pricing,
+ * and compat are never borrowed: a host with no per-model tariff stays
+ * zeroed.
+ */
+export function mapCanonicalReferenceModel<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	if (reference) {
+		return mapWithBundledReference(entry, defaults, reference);
+	}
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as ModelSpec<TApi> | undefined;
+	if (!canonical) {
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	}
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	// `thinking` stays unset: ladders are host policy, and the canonical
+	// reference is another host's. An inherited explicit ladder would win
+	// `resolveThinkingPolicy` and defeat the provider's authored thinking
+	// rules; provider KDL resolves the wire dialect for discovered rows the
+	// same way it does for bundled ones.
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		contextWindow,
+		maxTokens,
+	};
+}
+
 function normalizeAnthropicBaseUrl(baseUrl: string | undefined, fallback: string): string {
 	const value = baseUrl?.trim();
 	if (!value) {
@@ -1214,49 +1257,12 @@ export interface GmiCloudModelManagerConfig {
 }
 
 /**
- * Map a discovered GMI Cloud model to a full spec.
- *
- * GMI's `/v1/models` returns only bare `{id}` rows, so discovery defaults carry
- * no limits, reasoning, or thinking metadata. When a gmi-cloud bundled
- * reference exists (the seeded default) it supplies GMI's published tariff and
- * limits directly. Every other id is an open-weight model GMI resells under its
- * canonical id (`deepseek-ai/…`, `moonshotai/…`, `zai-org/…`, `Qwen/…`), so its
- * intrinsic capabilities — context window, output limit, reasoning, thinking
- * ladder — are recovered from any bundled upstream entry via the canonical
- * reference index. Pricing is deliberately never borrowed across providers:
- * GMI's per-model tariff is unknown for these ids, so cost stays zeroed rather
- * than inheriting another provider's rate.
+ * GMI's `/v1/models` returns only bare `{id}` rows with no capability
+ * metadata; {@link mapCanonicalReferenceModel} hydrates them. GMI's own
+ * bundled seed supplies the published tariff and limits. Pricing is never
+ * borrowed: GMI's per-model tariff is unknown for resold ids, so cost stays
+ * zeroed.
  */
-function mapGmiCloudModel(
-	entry: OpenAICompatibleModelRecord,
-	defaults: ModelSpec<"openai-completions">,
-	reference: ModelSpec<"openai-completions"> | undefined,
-): ModelSpec<"openai-completions"> {
-	if (reference) {
-		return mapWithBundledReference(entry, defaults, reference);
-	}
-	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as
-		| ModelSpec<"openai-completions">
-		| undefined;
-	if (!canonical) {
-		return { ...defaults, name: toModelName(entry.name, defaults.name) };
-	}
-	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
-	const maxTokens =
-		canonical.maxTokens != null && contextWindow != null
-			? Math.min(canonical.maxTokens, contextWindow)
-			: (canonical.maxTokens ?? defaults.maxTokens);
-	return {
-		...defaults,
-		name: toModelName(entry.name, canonical.name ?? defaults.name),
-		reasoning: canonical.reasoning,
-		input: canonical.input,
-		...(canonical.thinking && { thinking: canonical.thinking }),
-		contextWindow,
-		maxTokens,
-	};
-}
-
 export function gmiCloudModelManagerOptions(
 	config?: GmiCloudModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -1267,7 +1273,7 @@ export function gmiCloudModelManagerOptions(
 		cacheProviderId: resolveModelCacheProviderId("gmi-cloud"),
 		config,
 		requireApiKey: true,
-		mapModel: mapGmiCloudModel,
+		mapModel: mapCanonicalReferenceModel,
 	});
 }
 
@@ -5466,6 +5472,47 @@ export function stepfunModelManagerOptions(
 		// Must live on the manager options, not only the KDL descriptor:
 		// `createModelManager()` prunes the bundled slice from this flag.
 		dynamicModelsAuthoritative: true,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// 16.10 Munito
+// ---------------------------------------------------------------------------
+
+export interface MunitoModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/**
+ * Chat models only: OCR SKUs are excluded via `runtime/behavior.kdl`
+ * (`exclude-models provider="munito"`).
+ */
+export function isMunitoChatModelId(id: string): boolean {
+	const normalized = id.trim().toLowerCase();
+	if (!normalized) {
+		return false;
+	}
+	return !isExcludedModel("munito", normalized);
+}
+
+/**
+ * Munito model-manager options. `/models` is public (invalid keys still 401),
+ * so discovery runs keyless; the key gates inference, not the roster probe.
+ * A successful snapshot is authoritative over the bundled seed rows.
+ */
+export function munitoModelManagerOptions(
+	config?: MunitoModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createOpenAICompatibleModelManagerOptions({
+		api: "openai-completions",
+		providerId: "munito",
+		defaultBaseUrl: "https://api.munito.ai/inference/v1",
+		config,
+		dynamicModelsAuthoritative: true,
+		filterModel: (_entry, model) => isMunitoChatModelId(model.id),
+		mapModel: mapCanonicalReferenceModel,
 	});
 }
 

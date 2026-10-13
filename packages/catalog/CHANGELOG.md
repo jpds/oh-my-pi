@@ -5,6 +5,9 @@
 ### Changed
 
 - GPT Image models (`gpt-image-*`, `chatgpt-image-*`) now classify as their own `gpt-image` family instead of `gpt` or `chatgpt`, so GPT chat-model rules no longer apply to them ([#14619](https://github.com/can1357/oh-my-pi/pull/14619) by [@jimhester](https://github.com/jimhester))
+### Added
+
+- Added Munito (`munito`) as an open-model provider: OpenAI-compatible chat completions at `api.munito.ai/inference/v1` with keyless-authoritative `/models` discovery, canonical-reference hydration, and `omp login munito` ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
 
 ## [18.11.1] - 2026-10-15
 
