@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `mnemopi.embeddingCacheDir`, pointing local embedding model loads (and the machine-shared embedding server keyed on them) at a specific fastembed cache dir instead of `~/.omp/cache/fastembed`. Intended for pinned model stores in images or containers: a read-only dir missing model files fails init with a warning rather than downloading, while a writable dir is populated on demand.
+
 ## [18.11.0] - 2026-10-14
 
 ### Added

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `embeddings.cacheDir` to `MnemopiEmbeddingRuntimeOptions`, so an embedding provider can point local model loads at a specific fastembed cache dir.
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed

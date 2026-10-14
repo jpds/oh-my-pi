@@ -92,3 +92,25 @@ describe("loadMnemopiConfig database path resolution", () => {
 		expect(mnemopiConfigFor({ "mnemopi.dbPath": " \t " }, agentDir).dbPath).toBe(defaultPath);
 	});
 });
+
+describe("loadMnemopiConfig embeddingCacheDir", () => {
+	it("threads a pinned dir through providerOptions.embeddings.cacheDir", () => {
+		const config = mnemopiConfigFor({
+			"mnemopi.embeddingCacheDir": "/nix/store/pinned-mnemopi-bge-base-en-v1.5-onnx-q",
+		});
+		expect(config.providerOptions.embeddings).toEqual({
+			cacheDir: "/nix/store/pinned-mnemopi-bge-base-en-v1.5-onnx-q",
+		});
+	});
+
+	it("trims whitespace around the pinned dir", () => {
+		const config = mnemopiConfigFor({ "mnemopi.embeddingCacheDir": "  /nix/store/pinned  " });
+		expect(config.providerOptions.embeddings).toEqual({ cacheDir: "/nix/store/pinned" });
+	});
+
+	it("keeps unset and blank settings absent so the default cache path applies", () => {
+		expect(mnemopiConfigFor({}).providerOptions.embeddings).toBeUndefined();
+		expect(mnemopiConfigFor({ "mnemopi.embeddingCacheDir": "" }).providerOptions.embeddings).toBeUndefined();
+		expect(mnemopiConfigFor({ "mnemopi.embeddingCacheDir": "   " }).providerOptions.embeddings).toBeUndefined();
+	});
+});

@@ -333,8 +333,16 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 	if (modelName === null) {
 		return null;
 	}
-	const cacheDir = getFastembedCacheDir();
-	mkdirSync(cacheDir, { recursive: true });
+	// A scoped `cacheDir` (e.g. `mnemopi.embeddingCacheDir`) is typically a pinned
+	// model store: no mkdir here, and the download refusal for read-only pins
+	// lives in the consumer-installed initializer (state.ts), where cacheDir is
+	// known to belong to a pinned path rather than the shared default.
+	const overrideCacheDir = activeEmbeddingOptions()?.cacheDir;
+	const cacheDir = overrideCacheDir ?? getFastembedCacheDir();
+	if (overrideCacheDir === undefined) {
+		mkdirSync(cacheDir, { recursive: true });
+	}
+
 	const loading = localModelInitializer({
 		model: modelName,
 		cacheDir,

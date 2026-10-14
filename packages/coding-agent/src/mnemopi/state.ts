@@ -1,9 +1,11 @@
 import { dirname } from "node:path";
+import * as fs from "node:fs/promises";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type * as MnemopiNs from "@oh-my-pi/pi-mnemopi";
 import type { Mnemopi, RecallResult } from "@oh-my-pi/pi-mnemopi";
 import type * as MnemopiCoreNs from "@oh-my-pi/pi-mnemopi/core";
 import type { LocalModelInitializer } from "@oh-my-pi/pi-mnemopi/core";
+import { isFastembedModelCached } from "@oh-my-pi/pi-mnemopi/core/fastembed-model-cache";
 import { logger, prompt, toError, withLoopPhase } from "@oh-my-pi/pi-utils";
 import {
 	composeRecallQuery,
@@ -50,12 +52,29 @@ let localModelInitializerInstalled = false;
 function installLocalModelInitializer(setInitializer: (initializer: LocalModelInitializer) => void): void {
 	if (localModelInitializerInstalled) return;
 	localModelInitializerInstalled = true;
-	setInitializer(({ model, cacheDir }) =>
-		mnemopiEmbedClient.initialize(model, cacheDir).then(handle => {
-			if (handle) return handle;
-			throw new Error("mnemopi embedding server unavailable");
-		}),
-	);
+	setInitializer(async ({ model, cacheDir }) => {
+		const pinned = cacheDir !== undefined && cacheDir !== "";
+		const cached = pinned ? await isFastembedModelCached(model, cacheDir) : true;
+		// A writable pin (e.g. a data volume mounted at mnemopi.embeddingCacheDir)
+		// still lets fastembed download; a read-only pin is a missing-file strike:
+		// the fetch would fail or never be attempted from a read-only mount.
+		if (pinned && !cached) {
+			try {
+				await fs.access(cacheDir, fs.constants.W_OK);
+			} catch {
+				logger.warn(
+					"mnemopi-embed: pinned embedding cache dir is read-only and missing model files; refusing to download",
+					{ model, cacheDir },
+				);
+				throw new Error(
+					`pinned embedding cache dir is read-only and missing model files for ${model}: ${cacheDir}`,
+				);
+			}
+		}
+		const handle = await mnemopiEmbedClient.initialize(model, cacheDir);
+		if (handle) return handle;
+		throw new Error("mnemopi embedding server unavailable");
+	});
 }
 
 /**

@@ -13,6 +13,7 @@ import {
 	cfgMnemopiDebug,
 	cfgMnemopiEmbeddingApiKey,
 	cfgMnemopiEmbeddingApiUrl,
+	cfgMnemopiEmbeddingCacheDir,
 	cfgMnemopiEmbeddingModel,
 	cfgMnemopiEmbeddingVariant,
 	cfgMnemopiEnhancedRecall,
@@ -37,7 +38,7 @@ export type MnemopiScoping = "global" | "per-project" | "per-project-tagged";
 
 export type MnemopiProviderOptions = Pick<
 	MnemopiOptions,
-	"noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey" | "llm" | "debug"
+	"noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey" | "llm" | "debug" | "embeddings"
 >;
 
 export interface MnemopiBackendConfig {
@@ -85,6 +86,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const variantModel =
 		embeddingVariant === "multilingual" ? "intfloat/multilingual-e5-large" : "BAAI/bge-base-en-v1.5";
 	const embeddingModel = embeddingOverride?.trim() || variantModel;
+	const embeddingCacheDir = cfgMnemopiEmbeddingCacheDir.get(settings);
 	return {
 		dbPath,
 		baseBank: scope.baseBank,
@@ -110,6 +112,11 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 			embeddingModel,
 			embeddingApiUrl: cfgMnemopiEmbeddingApiUrl.get(settings),
 			embeddingApiKey: cfgMnemopiEmbeddingApiKey.get(settings),
+			// `cacheDir` exists only as a nested `embeddings` runtime option, not a flat
+			// `MnemopiOptions` field; omit the group entirely when unset.
+			...(embeddingCacheDir !== undefined && embeddingCacheDir.trim() !== ""
+				? { embeddings: { cacheDir: embeddingCacheDir.trim() } }
+				: {}),
 			llm:
 				llmMode === "remote"
 					? {
