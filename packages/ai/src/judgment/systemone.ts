@@ -19,7 +19,7 @@ import { parseCloudflareCredential } from "@oh-my-pi/pi-catalog/wire/cloudflare"
 import { $env, isRecord } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { embeddedImageDataUrl } from "../images/shared";
-import { type Questions, tokenUsage } from "./types";
+import { type JudgmentRequest, type Questions, tokenUsage } from "./types";
 import { type DecodedJudgment, finiteNumber, type JudgmentWire } from "./wire";
 
 /**
@@ -110,7 +110,11 @@ function encodeQuestions(
 function systemOneWire(path: string, judgment?: JudgmentConfig): JudgmentWire {
 	return {
 		target: (baseUrl, _model, key) => ({ url: `${baseUrl}${path}`, token: key }),
-		encode: (request, model) => ({ state: request.state, model, questions: encodeQuestions(request, judgment) }),
+		encode: (request: JudgmentRequest<Questions>, model) => ({
+			state: request.state,
+			model,
+			questions: encodeQuestions(request, judgment),
+		}),
 		decode: (payload, questions) => decodeSystemOne(payload, questions ?? {}, judgment),
 	};
 }

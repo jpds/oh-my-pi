@@ -1,23 +1,25 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
+import * as providersModule from "@oh-my-pi/pi-catalog/compat/providers";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { readModelCache, writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { vercelAiGatewayModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-function mockModelsList(
-	data: (Record<string, unknown> & { id: string })[],
-): typeof fetch {
+function mockModelsList(data: (Record<string, unknown> & { id: string })[]): typeof fetch {
 	return (async () => Response.json({ object: "list", data })) as unknown as typeof fetch;
 }
 
-function byId(models: { id: string }[] | null | undefined): Map<string, { id: string }> {
+function byId<T extends { id: string }>(models: readonly T[] | null | undefined): Map<string, T> {
 	return new Map((models ?? []).map(model => [model.id, model]));
 }
 
 describe("Vercel AI Gateway provider", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
 	test("caps meta/muse-spark-1.2-contributor output allowance to 131072 while preserving context window", async () => {
 		// Vercel currently reports both context_window and max_tokens as 1M for the
 		// contributor model, which makes Anthropic messages requests fail with 400
@@ -68,14 +70,50 @@ describe("Vercel AI Gateway provider", () => {
 
 	test("strips a trailing /v1 from custom eval base URLs so the route does not double-prefix", async () => {
 		const fetchMock = (async () =>
-			Response.json({ object: "list", data: [{ id: "typesafe-ai/jev", type: "evaluation" }] })) as unknown as typeof fetch;
+			Response.json({
+				object: "list",
+				data: [{ id: "typesafe-ai/jev", type: "evaluation" }],
+			})) as unknown as typeof fetch;
 		const options = vercelAiGatewayModelManagerOptions({ baseUrl: "https://proxy.example/v1", fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
 		const jev = (models ?? []).find(mo => mo.id === "typesafe-ai/jev");
 		expect(jev?.baseUrl).toBe("https://proxy.example");
-		// The other three seeds are appended (not discovered) — they must rebase too,
-		// or a proxied consumer would send credential + request to the public gateway.
-		expect(byId(models).get("liquid/d1")?.baseUrl).toBe("https://proxy.example");
+		// Appended unbundled seeds must rebase too, or a proxied consumer
+		// would send credential + request to the public gateway. (The four
+		// stable seeds are bundled, so they dedupe out of the append; laya is
+		// live-only and exercises the append path.)
+	});
+
+	test("rebases appended unbundled seeds onto a custom gateway root", async () => {
+		// All four stable seeds are bundled, so none appends; simulate an
+		// unbundled seed by spying seedModels to return an extra eval row.
+		const extraSeed = {
+			id: "typesafe-ai/future-jev",
+			name: "Future Jev",
+			api: "typesafe",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh",
+			reasoning: false,
+			input: ["text"],
+			supportsTools: false,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 32_000,
+			maxTokens: 4096,
+		};
+		const realSeeds = seedModels("vercel-ai-gateway");
+		const seedSpy = vi.spyOn(providersModule, "seedModels").mockReturnValue([...realSeeds, extraSeed] as never);
+		try {
+			const options = vercelAiGatewayModelManagerOptions({
+				baseUrl: "https://proxy.example/v1",
+				fetch: mockModelsList([{ id: "some-chat-model", tags: ["tool-use"] }]),
+			});
+			const models = await options.fetchDynamicModels?.();
+			const appended = byId(models).get("typesafe-ai/future-jev");
+			expect(appended?.baseUrl).toBe("https://proxy.example");
+			expect(appended?.kind).toBe("judge");
+		} finally {
+			seedSpy.mockRestore();
+		}
 	});
 
 	test("maps type:evaluation rows to api typesafe kind judge beside chat rows", async () => {
@@ -388,6 +426,59 @@ describe("Vercel AI Gateway provider", () => {
 		expect(cached?.authoritative).toBe(false);
 	});
 
+	test("offline manager returns bundled judges with kind judge and KDL judgment contract", async () => {
+		const seededIds = [
+			"typesafe-ai/jev",
+			"microsoft/microsoft-decision-1",
+			"liquid/d1",
+			"openai/gpt-6-luna-decisions",
+		];
+		const failingFetch = (async () => {
+			throw new Error("offline");
+		}) as unknown as typeof fetch;
+		const result = await resolveProviderModels(
+			{ ...vercelAiGatewayModelManagerOptions({ fetch: failingFetch }), cacheDbPath: ":memory:" },
+			"offline",
+		);
+		for (const id of seededIds) {
+			const model = result.models.find(m => m.id === id);
+			expect(model).toBeDefined();
+			if (!model) continue;
+			expect(model.kind).toBe("judge");
+			expect(model.api).toBe("typesafe");
+			expect(model.supportsTools).toBe(false);
+			expect(model.judgment).toEqual({
+				route: "/v1/evaluate",
+				typeMap: { noul: "boolean" },
+				valueMap: { noul: "probability" },
+				usageMap: { input: "inputTokens", output: "outputTokens" },
+			});
+		}
+		expect(result.source).toBe("bundled");
+	});
+
+	test("preserves explicit spec judgment when provider has no KDL judgment axis", () => {
+		const explicitSpec = {
+			id: "example-judge",
+			name: "Example Judge",
+			baseUrl: "https://example.com",
+			provider: "example-gateway",
+			api: "typesafe" as const,
+			reasoning: false,
+			input: ["text" as const],
+			cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 16_000,
+			maxTokens: 4096,
+			judgment: {
+				route: "/v1/evaluate",
+			},
+		};
+		const built = buildModel(explicitSpec);
+		expect(built.judgment).toEqual({
+			route: "/v1/evaluate",
+		});
+	});
+
 	test("drops stale judgment policy on api-switched rebuild", () => {
 		const evalSpec = {
 			id: "typesafe-ai/jev",
@@ -409,16 +500,32 @@ describe("Vercel AI Gateway provider", () => {
 			usageMap: { input: "inputTokens", output: "outputTokens" },
 		});
 
+		// Production rebuilds spread the prior model (mergeDynamicModel spreads
+		// existing+dynamic), so judgment arrives as an own spec property; the
+		// merge site gates it on api equality instead.
 		const rebuiltAnthropic = buildModel({
 			...toModelSpec(built),
-			api: "anthropic-messages",
+			api: "anthropic-messages" as const,
+			judgment: undefined,
 		});
 		expect(rebuiltAnthropic.judgment).toBeUndefined();
 
 		const rebuiltOpenRouter = buildModel({
 			...toModelSpec(built),
-			api: "openrouter-decisions",
+			api: "openrouter-decisions" as const,
+			judgment: undefined,
 		});
 		expect(rebuiltOpenRouter.judgment).toBeUndefined();
+
+		const explicitRebuild = buildModel({
+			...toModelSpec(built),
+			api: "anthropic-messages",
+			judgment: {
+				route: "/v1/custom-evaluate",
+			},
+		});
+		expect(explicitRebuild.judgment).toEqual({
+			route: "/v1/custom-evaluate",
+		});
 	});
 });

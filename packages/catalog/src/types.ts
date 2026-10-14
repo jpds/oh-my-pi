@@ -1390,6 +1390,12 @@ export interface JudgmentUsageMap {
 	cost?: string;
 }
 
+/** Wire type overrides for judgment question types. Defaults: canonical names `noul`, `choice`, `score`. */
+export type JudgmentTypeMap = Partial<Record<"noul" | "choice" | "score", string>>;
+
+/** Wire key overrides for judgment answer values. Defaults: canonical names `noul`, `choice`, `score`. */
+export type JudgmentValueMap = Partial<Record<"noul" | "choice" | "score", string>>;
+
 /**
  * Per-model (+ provider baseline) overrides for System One–compatible judgment
  * endpoints. Routes `typesafe`-family models at judgment time without new `api`

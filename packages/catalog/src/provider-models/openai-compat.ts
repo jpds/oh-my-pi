@@ -4257,7 +4257,7 @@ function appendVercelGatewaySeeds<TApi extends Api>(
 	const foundIds = new Set(discovered.map(model => model.id));
 	const appended = seedModels<TApi>("vercel-ai-gateway")
 		.filter(seed => !foundIds.has(seed.id))
-		.map(seed => ({ ...seed, baseUrl }));
+		.map(seed => ({ ...seed, baseUrl, ...(seed.api === "typesafe" ? { kind: "judge" as const } : {}) }));
 	return appended.length === 0 ? discovered : [...discovered, ...appended];
 }
 
