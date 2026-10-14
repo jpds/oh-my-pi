@@ -132,3 +132,29 @@ describe("loadMnemopiConfig database path resolution", () => {
 		expect(mnemopiConfigFor({ "mnemopi.dbPath": viaLink }).dbPath).toBe(viaLink);
 	});
 });
+
+describe("loadMnemopiConfig embeddingCacheDir", () => {
+	function cacheDirFor(overrides: Record<string, unknown>): string | undefined {
+		const embeddings = mnemopiConfigFor(overrides).providerOptions.embeddings;
+		return embeddings === false ? undefined : embeddings?.cacheDir;
+	}
+
+	it("threads a pinned dir through providerOptions.embeddings.cacheDir", () => {
+		expect(
+			cacheDirFor({ "mnemopi.embeddingCacheDir": "/nix/store/pinned-mnemopi-bge-base-en-v1.5-onnx-q" }),
+		).toBe("/nix/store/pinned-mnemopi-bge-base-en-v1.5-onnx-q");
+	});
+
+	it("trims whitespace around the pinned dir", () => {
+		expect(cacheDirFor({ "mnemopi.embeddingCacheDir": "  /nix/store/pinned  " })).toBe("/nix/store/pinned");
+	});
+
+	// The group itself stays present on main's contract (it carries `queryPrefix` and
+	// `inputType`); the pinned-dir contract is that an unset or blank value leaves
+	// `cacheDir` out, so fastembed resolves the shared default cache path.
+	it("keeps unset and blank settings absent so the default cache path applies", () => {
+		expect(cacheDirFor({})).toBeUndefined();
+		expect(cacheDirFor({ "mnemopi.embeddingCacheDir": "" })).toBeUndefined();
+		expect(cacheDirFor({ "mnemopi.embeddingCacheDir": "   " })).toBeUndefined();
+	});
+});

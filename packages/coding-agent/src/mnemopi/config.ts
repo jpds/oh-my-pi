@@ -14,6 +14,7 @@ import {
 	cfgMnemopiDebug,
 	cfgMnemopiEmbeddingApiKey,
 	cfgMnemopiEmbeddingApiUrl,
+	cfgMnemopiEmbeddingCacheDir,
 	cfgMnemopiEmbeddingInputType,
 	cfgMnemopiEmbeddingModel,
 	cfgMnemopiEmbeddingQueryPrefix,
@@ -89,6 +90,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const variantModel =
 		embeddingVariant === "multilingual" ? "intfloat/multilingual-e5-large" : "BAAI/bge-base-en-v1.5";
 	const embeddingModel = embeddingOverride?.trim() || variantModel;
+	const embeddingCacheDir = cfgMnemopiEmbeddingCacheDir.get(settings);
 	return {
 		dbPath,
 		baseBank: scope.baseBank,
@@ -118,6 +120,11 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 				// A blank prefix is unset; a set one keeps its whitespace (`query: `).
 				queryPrefix: cfgMnemopiEmbeddingQueryPrefix.get(settings) || undefined,
 				inputType: cfgMnemopiEmbeddingInputType.get(settings),
+				// `cacheDir` exists only as a nested `embeddings` runtime option, not a flat
+				// `MnemopiOptions` field; a blank value leaves the shared fastembed cache.
+				...(embeddingCacheDir !== undefined && embeddingCacheDir.trim() !== ""
+					? { cacheDir: embeddingCacheDir.trim() }
+					: {}),
 			},
 			llm:
 				llmMode === "remote"
