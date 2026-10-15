@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added the `PI_CONFIG_DECLARATIVE_FILES` declarative settings layer (also `configDeclarativeFiles` on `Settings.init`): config files that load below the global config, so a deployment image can declare values the agent still overrides in-session.
+- Added the `PI_CONFIG_DECLARATIVE_FILES` declarative settings layer (also `configDeclarativeFiles` on `Settings.init`): config files that load below the global config, so a deployment image can declare values the agent still overrides in-session. The settings panel shows those values in a colour of their own, rather than the colour it uses for settings you changed yourself.
 
 ### Fixed
 

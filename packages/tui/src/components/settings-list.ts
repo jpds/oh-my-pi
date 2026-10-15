@@ -10,6 +10,7 @@ import { sameItems, sameProps } from "../native/memo";
 import { plainLine, plainText } from "../native/spans";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import type { Component } from "../tui";
+import type { ThemeColor } from "../theme/schema";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
 import { FormField, type FormFieldOptions, type FormFieldTheme, SelectFormField, TextFormField } from "./form";
@@ -52,6 +53,12 @@ export interface SettingItem {
 	changed?: boolean;
 	/** The default, as a native settings page names it in the changed dot's title. */
 	defaultLabel?: string;
+	/**
+	 * True when the machine's declarative settings layer supplies the displayed value, rather than the
+	 * user or host writing it. Rows render in {@link DECLARED_SETTING_COLOR} so a baked-in value never
+	 * reads as an edit the user made.
+	 */
+	declared?: boolean;
 	/** Render as a non-interactive section heading. Skipped by navigation and search. */
 	heading?: boolean;
 }
@@ -103,10 +110,24 @@ function hasPrefsOption(component: Component): component is Component & PrefsOpt
 	return "prefsOption" in component;
 }
 
+/**
+ * Theme token for rows whose value the machine's declarative settings layer declares: the counterpart
+ * of the `statusLineGitDirty` hue that paints changed rows, so a declared value reads as the baseline
+ * rather than as an edit the user made. Every bundled theme defines it in a saturated hue that no
+ * theme reuses for `changed`, the muted tier, or plain text.
+ */
+export const DECLARED_SETTING_COLOR: ThemeColor = "statusLineGitClean";
+
 export interface SettingsListTheme {
 	label: (text: string, selected: boolean, changed: boolean) => string;
 	value: (text: string, selected: boolean, changed: boolean) => string;
 	description: (text: string) => string;
+	/**
+	 * Style for a row whose value the machine's declarative layer declares rather than the user or host
+	 * writing it; takes precedence over the changed styling of `label`/`value`. Falls back to the
+	 * ordinary row styling when omitted.
+	 */
+	declared?: (text: string) => string;
 	/** Style for risk notes and the row warning glyph. Falls back to `description` when omitted. */
 	warning?: (text: string) => string;
 	/** Glyph marking rows that carry a `warning`. Omitted hides the row marker. */
@@ -701,7 +722,10 @@ export class SettingsList implements Component {
 	#describeItem(item: NativeDescribedSetting): NativeNode {
 		const value = plainLine(String(item.currentValue ?? ""));
 		const changed = item.changed === true;
-		const signature = `${item.heading === true}\0${item.label}\0${value}\0${changed}\0${item.warning ?? ""}\0${item.description ?? ""}`;
+		const declared = item.declared === true;
+		// The declared hue outranks the changed one: a value the machine baked in is not the user's edit.
+		const emphasis = declared ? DECLARED_SETTING_COLOR : changed ? "accent" : undefined;
+		const signature = `${item.heading === true}\0${item.label}\0${value}\0${changed}\0${declared}\0${item.warning ?? ""}\0${item.description ?? ""}`;
 		const cached = item[kNativeItem];
 		if (cached?.signature === signature) return cached.node;
 		let described: NativeNode;
@@ -713,7 +737,7 @@ export class SettingsList implements Component {
 				item.id,
 			);
 		} else {
-			const label: TspSpan[] = [span(plainLine(item.label), changed ? "accent" : undefined)];
+			const label: TspSpan[] = [span(plainLine(item.label), emphasis)];
 			if (item.warning && this.#theme.warningMark)
 				label.push(span(` ${plainText(this.#theme.warningMark)}`, "warning"));
 			const detail: TspSpan[] = [];
@@ -726,7 +750,7 @@ export class SettingsList implements Component {
 				"item",
 				{
 					label,
-					value: [span(value, changed ? "accent" : "muted")],
+					value: [span(value, emphasis ?? "muted")],
 					detail: detail.length > 0 ? detail : undefined,
 				},
 				undefined,
@@ -787,9 +811,18 @@ export class SettingsList implements Component {
 			return hovered && this.#theme.hovered ? this.#theme.hovered(text) : text;
 		}
 		const warningStyle = this.#theme.warning ?? this.#theme.description;
+		// A declared value is the machine's, not the user's edit: the declared hue outranks both the
+		// changed styling and the selection accent, so a baked-in value never reads as dirty.
+		const declaredStyle = item.declared === true ? this.#theme.declared : undefined;
 		const labelText =
-			this.#theme.label(item.label, isSelected, item.changed === true) + (mark ? warningStyle(mark) : "") + labelPad;
-		const valueText = this.#theme.value(valuePlain, isSelected, item.changed === true);
+			(declaredStyle
+				? declaredStyle(item.label)
+				: this.#theme.label(item.label, isSelected, item.changed === true)) +
+			(mark ? warningStyle(mark) : "") +
+			labelPad;
+		const valueText = declaredStyle
+			? declaredStyle(valuePlain)
+			: this.#theme.value(valuePlain, isSelected, item.changed === true);
 		const text = truncateToWidth(prefix + labelText + separator + valueText, Math.max(0, rowWidth));
 		// Pointer hover paints a band behind the whole row, distinct from the
 		// keyboard selection (cursor glyph + accent) which stays where it is.
