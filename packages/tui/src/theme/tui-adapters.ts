@@ -8,7 +8,7 @@ import {
 import type { EditorTheme } from "../components/editor";
 import type { MarkdownTheme } from "../components/markdown";
 import type { SelectListTheme } from "../components/select-list";
-import type { SettingsListTheme } from "../components/settings-list";
+import { DECLARED_SETTING_COLOR, type SettingsListTheme } from "../components/settings-list";
 import type { SymbolTheme } from "../symbols";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
@@ -392,6 +392,7 @@ export function getSettingsListTheme(): SettingsListTheme {
 			label: (text: string) => text,
 			value: (text: string) => text,
 			description: (text: string) => text,
+			declared: (text: string) => text,
 			warning: (text: string) => text,
 			warningMark: "!",
 			cursor: "> ",
@@ -407,6 +408,7 @@ export function getSettingsListTheme(): SettingsListTheme {
 		value: (text: string, selected: boolean, changed: boolean) =>
 			changed ? theme.fg("statusLineGitDirty", text) : selected ? theme.fg("accent", text) : theme.fg("muted", text),
 		description: (text: string) => theme.fg("dim", text),
+		declared: (text: string) => theme.fg(DECLARED_SETTING_COLOR, text),
 		warning: (text: string) => theme.fg("warning", text),
 		warningMark: theme.status.warning,
 		cursor: theme.fg("accent", `${theme.nav.cursor} `),

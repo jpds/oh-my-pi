@@ -1479,6 +1479,7 @@ export class SettingsSelectorComponent implements Component {
 			description: def.description,
 			warning: def.warning,
 			changed,
+			declared: this.#context.settings.declared?.(def.path) === true,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
 		};
 

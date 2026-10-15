@@ -79,6 +79,12 @@ export function createSettingsHost(): SettingsHost {
 	return {
 		entries,
 		get: path => lookup(path)?.layered(settings),
+		// Layer provenance, not `Setting.provenance`: the panel shows the layered value, so an
+		// environment variable in play must not hide the layer that supplied what is displayed.
+		declared: path => {
+			const setting = lookup(path);
+			return setting !== undefined && settings.getProvenance(setting) === "declarative";
+		},
 		set: (path, value) => resolve(path).set(settings, value),
 		unset: path => resolve(path).unset(settings),
 		normalizeProviderLimits: normalizeProviderMaxInFlightRequests,

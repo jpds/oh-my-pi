@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgProvidersMaxInFlightRequests, cfgTemperature } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -179,5 +180,17 @@ describe("settings declarative layer", () => {
 		const settings = await Settings.init({ cwd: testDir, agentDir });
 		expect(settings.getConfigDeclarativeFiles()).toEqual([path.join(testDir, "declarative.yml")]);
 		expect(cfgTemperature.get(settings)).toBe(0.9);
+	});
+
+	it("marks the panel rows the declarative layer supplies, not the ones a writable layer does", async () => {
+		await writeYaml(declarativePath, { temperature: 0.9 });
+		useDeclarativeFiles();
+
+		const settings = await Settings.init({ cwd: projectDir, agentDir });
+		cfgCompactionEnabled.set(settings, false); // lands in the global config
+		const host = createSettingsHost();
+
+		expect(host.declared?.(cfgTemperature.id)).toBe(true);
+		expect(host.declared?.(cfgCompactionEnabled.id)).toBe(false);
 	});
 });

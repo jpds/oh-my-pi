@@ -148,6 +148,11 @@ export interface SettingsHost {
 	get(path: string): unknown;
 	set(path: string, value: unknown): void;
 	/**
+	 * Whether the machine's declarative settings layer supplies this setting's displayed value.
+	 * The panel colours those rows apart from ones the user changed. Omitted: nothing is declared.
+	 */
+	declared?(path: string): boolean;
+	/**
 	 * Removes the value from the global config: a project or other layer, or an environment
 	 * variable, that configures the setting still applies; otherwise the default does.
 	 */
