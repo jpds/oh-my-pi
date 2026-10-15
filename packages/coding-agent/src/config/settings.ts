@@ -61,7 +61,7 @@ import { cfgShellPath } from "../exec/settings";
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Settings layer that supplies an effective value; see {@link Settings.getProvenance}. */
-export type SettingProvenance = "env" | "runtime" | "overlay" | "project" | "global" | "default";
+export type SettingProvenance = "env" | "runtime" | "overlay" | "project" | "global" | "declarative" | "default";
 
 /** Raw settings object as stored in YAML */
 export interface RawSettings {
@@ -149,9 +149,18 @@ type LayerRefreshKind = PersistedReloadMode | "rescope";
 /** Quiet period after the last config-file event before the watcher reloads from disk. */
 const CONFIG_WATCH_DEBOUNCE_MS = 200;
 
-type ConfigOverlayReadResult = {
+type StrictConfigReadResult = {
 	settings: RawSettings;
 	shellPathSource: string | undefined;
+};
+
+/** Strict config-file family: `--config`/`PI_CONFIG_FILES` overlays vs declarative config files. */
+type StrictConfigKind = "overlay" | "declarative";
+
+/** Labels for {@link StrictConfigKind}; `title` opens a sentence, `noun` sits inside one. */
+const STRICT_CONFIG_LABELS: Record<StrictConfigKind, { title: string; noun: string }> = {
+	overlay: { title: "Config overlay", noun: "config overlay" },
+	declarative: { title: "Declarative config file", noun: "declarative config file" },
 };
 
 export interface SettingsOptions {
@@ -167,6 +176,12 @@ export interface SettingsOptions {
 	overrides?: Readonly<Record<string, unknown>>;
 	/** Extra config.yml-style overlays loaded after global/project settings */
 	configFiles?: string[];
+	/**
+	 * Declarative config.yml-style files, loaded *before* the global config so every
+	 * writable layer (global, project, overlay, runtime) outranks them. Same syntax as
+	 * `configFiles`, and merged after the `PI_CONFIG_DECLARATIVE_FILES` environment variable.
+	 */
+	configDeclarativeFiles?: string[];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -298,6 +313,7 @@ function projectLayerForMerge(project: RawSettings): RawSettings {
 
 /** One instance's own layers, lowest precedence first. */
 interface OwnLayers {
+	configDeclarative: RawSettings;
 	global: RawSettings;
 	project: RawSettings;
 	configOverlay: RawSettings;
@@ -309,7 +325,7 @@ export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides">>;
 
 /** A persisted layer re-read from disk: its new value, the file(s) it came from, and the read-side state it commits. */
 interface LayerRefresh {
-	layer: "global" | "project" | "configOverlay";
+	layer: "configDeclarative" | "global" | "project" | "configOverlay";
 	settings: RawSettings;
 	source: string;
 	commit(): void;
@@ -582,6 +598,10 @@ export class Settings {
 	#storage: AgentStorage | null = null;
 
 	#configFiles: string[] = [];
+	/** Declarative config files (`PI_CONFIG_DECLARATIVE_FILES`), the lowest-precedence file layer */
+	#configDeclarativeFiles: string[] = [];
+	/** Declarative layer, merged below the global config */
+	#configDeclarative: RawSettings = {};
 	/** Global settings from config.yml/config.yaml */
 	#global: RawSettings = {};
 	/** Project settings from .claude/settings.yml etc */
@@ -600,6 +620,8 @@ export class Settings {
 	#projectSettingsWarningsSeen = new Set<string>();
 	/** Explicit config overlay that most recently supplied shellPath. */
 	#overlayShellPathSource: string | undefined;
+	/** Declarative file that most recently supplied shellPath. */
+	#declarativeShellPathSource: string | undefined;
 	/** Runtime overrides (not persisted) */
 	#overrides: RawSettings = {};
 	/** Settings whose runtime override is a soft-pinned default ({@link pinDefaultValue}). */
@@ -674,6 +696,10 @@ export class Settings {
 		const configFiles = process.env.PI_CONFIG_FILES?.split(path.delimiter).filter(Boolean) ?? [];
 		if (options.configFiles) configFiles.push(...options.configFiles);
 		this.#configFiles = configFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
+		const configDeclarativeFiles =
+			process.env.PI_CONFIG_DECLARATIVE_FILES?.split(path.delimiter).filter(Boolean) ?? [];
+		if (options.configDeclarativeFiles) configDeclarativeFiles.push(...options.configDeclarativeFiles);
+		this.#configDeclarativeFiles = configDeclarativeFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
 		this.#persist = !options.inMemory && options.readOnly !== true;
 		liveSettingsInstances.add(new WeakRef(this));
 		if (options.overrides) this.#overrides = this.#overrideLayer(options.overrides);
@@ -876,8 +902,8 @@ export class Settings {
 
 	/**
 	 * Layer supplying the effective value of `setting`, in merge precedence order:
-	 * runtime override → config overlay → project → global → (overlay parent) → schema default.
-	 * A value that merges to `null` is unset and reports `"default"`.
+	 * runtime override → config overlay → project → global → declarative →
+	 * (overlay parent) → schema default. A value that merges to `null` is unset and reports `"default"`.
 	 */
 	getProvenance(setting: AnySetting): SettingProvenance {
 		if (!this.isConfigured(setting)) return "default";
@@ -886,6 +912,7 @@ export class Settings {
 		if (getByPath(this.#configOverlay, segments) !== undefined) return "overlay";
 		if (getByPath(projectLayerForMerge(this.#project), segments) !== undefined) return "project";
 		if (getByPath(this.#global, segments) !== undefined) return "global";
+		if (getByPath(this.#configDeclarative, segments) !== undefined) return "declarative";
 		return this.#parent?.getProvenance(setting) ?? "default";
 	}
 
@@ -1015,8 +1042,10 @@ export class Settings {
 	}
 
 	/**
-	 * Removes from `layers.overrides` (replaced by a copy) every soft pin the persisted `layers`
-	 * (global, project, `--config` overlay, parent) now configure; returns the settled settings.
+	 * Removes from `layers.overrides` (replaced by a copy) every soft pin the configured `layers`
+	 * (declarative, global, project, `--config` overlay, parent) now supply; returns the settled
+	 * settings. The declarative layer counts here: its values are configured values, and the pin
+	 * exists only while nothing configures the setting (see {@link pinDefaultValue}).
 	 */
 	#settlePins(layers: OwnLayers): AnySetting[] {
 		if (this.#softPins.size === 0) return [];
@@ -1177,6 +1206,7 @@ export class Settings {
 		addFile(path.join(projectCwd, ".claude", "settings.json"));
 		for (const file of this.#projectSourcePaths) addFile(file);
 		for (const file of this.#configFiles) addFile(file);
+		for (const file of this.#configDeclarativeFiles) addFile(file);
 		return targets;
 	}
 
@@ -1276,9 +1306,9 @@ export class Settings {
 	}
 
 	/**
-	 * Independent instance scoped to `cwd`: same global, `--config` overlay, and runtime layers, the
-	 * project layer re-read for `cwd` (persisted instances). An {@link overlay} clones its parent for
-	 * `cwd` and re-applies its own layers on top, so inherited values carry over.
+	 * Independent instance scoped to `cwd`: same declarative, global, `--config` overlay, and runtime
+	 * layers, the project layer re-read for `cwd` (persisted instances). An {@link overlay} clones its
+	 * parent for `cwd` and re-applies its own layers on top, so inherited values carry over.
 	 *
 	 * @throws Error when a configured value fails its definition's `validate` check.
 	 */
@@ -1299,9 +1329,12 @@ export class Settings {
 			if (!this.#persist) cloned.#projectShellPathSource = this.#projectShellPathSource;
 			cloned.#configFiles = [...this.#configFiles];
 			cloned.#overlayShellPathSource = this.#overlayShellPathSource;
+			cloned.#configDeclarativeFiles = [...this.#configDeclarativeFiles];
+			cloned.#declarativeShellPathSource = this.#declarativeShellPathSource;
 		}
 		cloned.#global = structuredClone(this.#global);
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
+		cloned.#configDeclarative = structuredClone(this.#configDeclarative);
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
 		const layers = { ...cloned.#ownLayers(), overrides: this.#buildOriginalOverrides() };
@@ -1363,13 +1396,14 @@ export class Settings {
 			}
 			const mutationGeneration = this.#persistedMutationGeneration;
 
-			const [globalResult, projectResult, overlayResult] = await Promise.allSettled([
+			const [declarativeResult, globalResult, projectResult, overlayResult] = await Promise.allSettled([
+				this.#readStrictConfigFiles(this.#configDeclarativeFiles, "declarative", false),
 				this.#readExistingMainYaml(false),
 				this.#readProjectSettings(false, { rejectNewWarnings: keepLastGood }),
-				this.#readConfigOverlays(false),
+				this.#readStrictConfigFiles(this.#configFiles, "overlay", false),
 			]);
 			if (mutationGeneration !== this.#persistedMutationGeneration) continue;
-			for (const result of [globalResult, projectResult, overlayResult]) {
+			for (const result of [declarativeResult, globalResult, projectResult, overlayResult]) {
 				if (result.status === "fulfilled") continue;
 				if (!keepLastGood) throw result.reason;
 				logger.warn("Settings: keeping last good config; on-disk change failed to load", {
@@ -1378,6 +1412,17 @@ export class Settings {
 			}
 
 			const refreshed: LayerRefresh[] = [];
+			if (declarativeResult.status === "fulfilled") {
+				const { settings, shellPathSource } = declarativeResult.value;
+				refreshed.push({
+					layer: "configDeclarative",
+					settings,
+					source: this.#configDeclarativeFiles.join(", "),
+					commit: () => {
+						this.#declarativeShellPathSource = shellPathSource;
+					},
+				});
+			}
 			if (globalResult.status === "fulfilled") {
 				const { configPath } = globalResult.value;
 				// A config this instance moved aside as malformed reads as missing until a save
@@ -1432,6 +1477,7 @@ export class Settings {
 
 			const previous = this.#snapshot();
 			for (const refresh of adopted) refresh.commit();
+			this.#configDeclarative = layers.configDeclarative;
 			this.#global = layers.global;
 			this.#project = layers.project;
 			this.#configOverlay = layers.configOverlay;
@@ -1494,6 +1540,7 @@ export class Settings {
 			await this.flush();
 			const project = this.#persist ? await this.#readProjectSettings(true, { cwd: normalized }) : undefined;
 			const candidate: OwnLayers = {
+				configDeclarative: this.#configDeclarative,
 				global: this.#global,
 				project: project?.settings ?? this.#project,
 				configOverlay: this.#configOverlay,
@@ -1543,6 +1590,11 @@ export class Settings {
 	/** Resolved absolute paths of the config overlays supplied to this instance. */
 	getConfigFiles(): readonly string[] {
 		return [...this.#configFiles];
+	}
+
+	/** Resolved absolute paths of the declarative config files for this instance. */
+	getConfigDeclarativeFiles(): readonly string[] {
+		return [...this.#configDeclarativeFiles];
 	}
 
 	/**
@@ -1601,6 +1653,9 @@ export class Settings {
 			return this.#projectShellPathSource ?? "the active project configuration";
 		}
 		if (this.#parent && !Object.hasOwn(this.#global, "shellPath")) return this.#parent.#shellPathSource();
+		if (!Object.hasOwn(this.#global, "shellPath") && Object.hasOwn(this.#configDeclarative, "shellPath")) {
+			return this.#declarativeShellPathSource ?? "the declarative configuration";
+		}
 		return this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
 	}
 
@@ -1823,19 +1878,21 @@ export class Settings {
 	/**
 	 * Report which layer actually supplies the effective model role across
 	 * full merge precedence (runtime override → config overlay → project →
-	 * global → default). Unlike {@link getModelRoleSource}, this accounts
-	 * for runtime and config-overlay layers and detects ownership by key
-	 * presence rather than normalized value, so a `null` tombstone in the
-	 * overlay or runtime layer correctly blocks lower layers. The project
-	 * layer is checked through {@link projectLayerForMerge} because a
-	 * project null is a cleared value (falls back to global), not a
-	 * tombstone.
+	 * global → declarative → parent → default). Unlike
+	 * {@link getModelRoleSource}, this accounts for runtime and config-overlay
+	 * layers and detects ownership by key presence rather than normalized
+	 * value, so a `null` tombstone in the overlay or runtime layer correctly
+	 * blocks lower layers. The project layer is checked through
+	 * {@link projectLayerForMerge} because a project null is a cleared value
+	 * (falls back to global), not a tombstone; the declarative layer is not a
+	 * tombstoning layer either.
 	 */
 	getModelRoleProvenance(role: ModelRole | string): SettingProvenance {
 		if (this.#modelRoleLayerOwns(this.#overrides, role)) return "runtime";
 		if (this.#modelRoleLayerOwns(this.#configOverlay, role)) return "overlay";
 		if (this.#modelRoleLayerOwns(projectLayerForMerge(this.#project), role)) return "project";
 		if (this.#modelRoleLayerOwns(this.#global, role)) return "global";
+		if (this.#modelRoleLayerOwns(this.#configDeclarative, role)) return "declarative";
 		return this.#parent?.getModelRoleProvenance(role) ?? "default";
 	}
 
@@ -1850,20 +1907,20 @@ export class Settings {
 
 	/**
 	 * Raw `modelPresets` entry for `name` from the highest-precedence layer that
-	 * defines it (runtime override → config overlay → project → global), whole —
-	 * same-name entries are NOT deep-merged across layers. A `null` entry on a
-	 * tombstoning layer (runtime, overlay) hides the preset; a `null` anywhere
-	 * else counts as unset. Falls back to the parent chain like the model-role
-	 * layer helpers.
+	 * defines it (runtime override → config overlay → project → global → declarative),
+	 * whole — same-name entries are NOT deep-merged across layers. A `null` entry on a
+	 * tombstoning layer (runtime, overlay) hides the preset; a `null` anywhere else
+	 * counts as unset. Falls back to the parent chain like the model-role layer helpers.
 	 */
 	getOwnedModelPreset(
 		name: string,
-	): { entry: unknown; source: "runtime" | "overlay" | "project" | "global" } | undefined {
+	): { entry: unknown; source: "runtime" | "overlay" | "project" | "global" | "declarative" } | undefined {
 		const layers = [
 			{ layer: this.#overrides, source: "runtime", tombstone: true },
 			{ layer: this.#configOverlay, source: "overlay", tombstone: true },
 			{ layer: projectLayerForMerge(this.#project), source: "project", tombstone: false },
 			{ layer: this.#global, source: "global", tombstone: false },
+			{ layer: this.#configDeclarative, source: "declarative", tombstone: false },
 		] as const;
 		for (const { layer, source, tombstone } of layers) {
 			const presets = getByPath(layer, ["modelPresets"]);
@@ -1927,9 +1984,10 @@ export class Settings {
 		if (projectResult.status === "rejected") throw projectResult.reason;
 
 		this.#project = projectResult.value;
+		this.#configDeclarative = await this.#loadConfigDefaults();
 		this.#configOverlay = await this.#loadConfigOverlays();
 
-		// Build merged view (global → project → overrides; project wins over global)
+		// Build merged view (declarative → global → project → overlay → overrides; later layers win)
 		this.#rebuildMerged();
 		this.#validateAll();
 		return this;
@@ -1958,6 +2016,7 @@ export class Settings {
 		}
 
 		this.#project = projectResult.value;
+		this.#configDeclarative = await this.#loadConfigDefaults();
 		this.#configOverlay = await this.#loadConfigOverlays();
 		this.#rebuildMerged();
 		this.#validateAll();
@@ -2482,48 +2541,65 @@ export class Settings {
 		this.#projectSettingsWarningsSeen = result.warningsSeen;
 	}
 
-	async #readConfigOverlays(captureLegacyChangelogVersion = true): Promise<ConfigOverlayReadResult> {
+	/** Reads a strict config-file family left to right, later files deep-merged over earlier ones. */
+	async #readStrictConfigFiles(
+		files: readonly string[],
+		kind: StrictConfigKind,
+		captureLegacyChangelogVersion: boolean,
+	): Promise<StrictConfigReadResult> {
 		let shellPathSource: string | undefined;
 		let settings: RawSettings = {};
-		for (const filePath of this.#configFiles) {
-			const overlay = await this.#loadOverlayYaml(filePath, captureLegacyChangelogVersion);
-			settings = this.#deepMerge(settings, overlay);
-			if (Object.hasOwn(overlay, "shellPath")) shellPathSource = filePath;
+		for (const filePath of files) {
+			const layer = await this.#loadStrictConfigYaml(filePath, kind, captureLegacyChangelogVersion);
+			settings = this.#deepMerge(settings, layer);
+			if (Object.hasOwn(layer, "shellPath")) shellPathSource = filePath;
 		}
 		return { settings, shellPathSource };
 	}
 
 	async #loadConfigOverlays(): Promise<RawSettings> {
-		const result = await this.#readConfigOverlays();
+		const result = await this.#readStrictConfigFiles(this.#configFiles, "overlay", true);
 		this.#overlayShellPathSource = result.shellPathSource;
 		return result.settings;
 	}
 
+	async #loadConfigDefaults(): Promise<RawSettings> {
+		const result = await this.#readStrictConfigFiles(this.#configDeclarativeFiles, "declarative", true);
+		this.#declarativeShellPathSource = result.shellPathSource;
+		return result.settings;
+	}
+
 	/**
-	 * Strict loader for explicit `--config` overlays: unlike `#loadYaml`,
-	 * missing or malformed files are hard errors so a typo'd path cannot
-	 * silently fall back to the persistent settings.
+	 * Strict loader for explicit `--config` overlays and declarative config files: unlike
+	 * `#loadYaml`, missing or malformed files are hard errors so a typo'd path cannot silently
+	 * fall back to the persistent settings, and an image whose baked-in declarative config file
+	 * went missing cannot boot into a half-configured state unnoticed.
 	 */
-	async #loadOverlayYaml(filePath: string, captureLegacyChangelogVersion = true): Promise<RawSettings> {
+	async #loadStrictConfigYaml(
+		filePath: string,
+		kind: StrictConfigKind,
+		captureLegacyChangelogVersion = true,
+	): Promise<RawSettings> {
+		const { title, noun } = STRICT_CONFIG_LABELS[kind];
 		let content: string;
 		try {
 			content = await Bun.file(filePath).text();
 		} catch (error) {
 			throw new Error(
 				isEnoent(error)
-					? `Config overlay not found: ${filePath}`
-					: `Failed to read config overlay ${filePath}: ${String(error)}`,
+					? `${title} not found: ${filePath}`
+					: `Failed to read ${noun} ${filePath}: ${String(error)}`,
 			);
 		}
 		let parsed: unknown;
 		try {
 			parsed = YAML.parse(content);
 		} catch (error) {
-			throw new Error(`Failed to parse config overlay ${filePath}: ${String(error)}`);
+			throw new Error(`Failed to parse ${noun} ${filePath}: ${String(error)}`);
 		}
 		if (parsed === null || parsed === undefined) return {};
 		if (typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new Error(`Config overlay must be a YAML mapping: ${filePath}`);
+			throw new Error(`${title} must be a YAML mapping: ${filePath}`);
 		}
 		return this.#migrateRawSettings(parsed as RawSettings, captureLegacyChangelogVersion);
 	}
@@ -3889,6 +3965,7 @@ export class Settings {
 
 	#ownLayers(): OwnLayers {
 		return {
+			configDeclarative: this.#configDeclarative,
 			global: this.#global,
 			project: this.#project,
 			configOverlay: this.#configOverlay,
@@ -3896,9 +3973,11 @@ export class Settings {
 		};
 	}
 
-	/** `layers` (global, project, `--config` overlay, runtime) merged in precedence order. */
+	/** `layers` merged in precedence order: declarative < global < project < `--config` overlay < runtime. */
 	#mergeOwnLayers(layers: OwnLayers): RawSettings {
-		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project));
+		let merged = this.#deepMerge({}, layers.configDeclarative);
+		merged = this.#deepMerge(merged, layers.global);
+		merged = this.#deepMerge(merged, projectLayerForMerge(layers.project));
 		merged = this.#deepMerge(merged, layers.configOverlay);
 		return this.#deepMerge(merged, layers.overrides);
 	}
@@ -3919,6 +3998,8 @@ export class Settings {
 	/**
 	 * `overrides` deep-merged over `base`. Keys follow the higher layer's order, then base-only keys:
 	 * record order is meaningful to some consumers (`retry.fallbackChains` is searched in order).
+	 * Only records recurse: arrays and scalars are replaced wholesale, so a higher layer's array wins
+	 * outright instead of merging element-wise.
 	 */
 	#deepMerge(base: RawSettings, overrides: RawSettings): RawSettings {
 		const result: RawSettings = {};

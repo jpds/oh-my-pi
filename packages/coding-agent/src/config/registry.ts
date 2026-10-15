@@ -759,10 +759,11 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 	}
 
 	/**
-	 * Holds the default as a runtime override only while no persisted layer — global, project,
-	 * `--config` overlay — configures this setting; no-op when the environment or any layer already
-	 * configures it, and dropped by a global write ({@link set}, {@link setEntry}, {@link setMember}) or
-	 * {@link unset} of this setting or when a reload or re-scope configures it (protocol-host defaults).
+	 * Holds the default as a runtime override only while no configured layer — declarative,
+	 * global, project, `--config` overlay — configures this setting; no-op when the environment or any
+	 * layer already configures it, and dropped by a global write ({@link set}, {@link setEntry},
+	 * {@link setMember}) or {@link unset} of this setting or when a reload or re-scope configures it
+	 * (protocol-host defaults).
 	 */
 	pinDefault(scope: ScopeLike): void {
 		if (this.envValue() === undefined) settingsOf(scope).pinDefaultValue(this);

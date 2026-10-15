@@ -133,13 +133,14 @@ export function deleteModelPreset(settings: Settings, name: string): ModelPreset
 }
 
 /**
- * Layer above global config that still defines preset `name`, if any — so a
- * global save can warn that the just-saved entry is shadowed and won't apply.
+ * Layer other than the global config that still defines preset `name`, if any — so a
+ * global save can warn that the just-saved entry is shadowed and won't apply. A layer
+ * above global config, or the declarative config below it, both count.
  */
 export function modelPresetShadowOwner(
 	settings: Settings,
 	name: string,
-): "runtime" | "overlay" | "project" | undefined {
+): "runtime" | "overlay" | "project" | "declarative" | undefined {
 	const owned = settings.getOwnedModelPreset(name);
 	return owned && owned.source !== "global" ? owned.source : undefined;
 }
@@ -150,6 +151,7 @@ const SOURCE_LABELS: Record<SettingProvenance, string> = {
 	overlay: "--config file",
 	project: "project config",
 	global: "global config",
+	declarative: "declarative config",
 	default: "default",
 };
 

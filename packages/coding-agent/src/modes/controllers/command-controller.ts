@@ -148,7 +148,8 @@ interface ForkTerminalDependencies {
  * Startup flags the fork child re-supplies from the parent's live state
  * (`--profile`, `--model`, `--thinking`, `--prompt-cache-key`) or that would
  * re-point it at a stale scope (`--config`/`--cwd`/`--provider`; the child
- * gets the effective overlays via `PI_CONFIG_FILES` and the session cwd).
+ * gets the effective overlays and declarative config via `PI_CONFIG_FILES` /
+ * `PI_CONFIG_DECLARATIVE_FILES` and the session cwd).
  */
 const FORK_LAUNCH_OVERRIDES: Readonly<Record<string, true>> = {
 	"--config": true,
@@ -1525,6 +1526,7 @@ export class CommandController {
 					OMP_PROFILE: activeProfile,
 					PI_PROFILE: activeProfile,
 					PI_CONFIG_FILES: this.ctx.settings.getConfigFiles().join(path.delimiter),
+					PI_CONFIG_DECLARATIVE_FILES: this.ctx.settings.getConfigDeclarativeFiles().join(path.delimiter),
 					PI_CODING_AGENT_SESSION_DIR: environment.PI_CODING_AGENT_SESSION_DIR,
 					XDG_DATA_HOME: environment.XDG_DATA_HOME,
 					XDG_STATE_HOME: environment.XDG_STATE_HOME,
