@@ -325,7 +325,10 @@ function globalValue(setting: AnySetting): unknown {
 function shadowingSource(setting: AnySetting): { json: Record<string, string>; message: string } | undefined {
 	const provenance = setting.provenance(settings);
 	switch (provenance) {
+		// `set` always writes the global layer, which outranks the declarative layer, so neither the
+		// schema default nor a declarative-config value can shadow the value just saved.
 		case "global":
+		case "declarative":
 		case "default":
 			return undefined;
 		case "env": {

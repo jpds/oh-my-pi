@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the `PI_CONFIG_DECLARATIVE_FILES` declarative settings layer (also `configDeclarativeFiles` on `Settings.init`): config files that load below the global config, so a deployment image can declare values the agent still overrides in-session.
+
 ### Fixed
 
 - Fixed `openai-models-list` discovery ignoring a model's top-level `max_output_tokens` / `max_completion_tokens`, which let gateway models inherit an output cap as large as the whole context window and send oversized `max_completion_tokens` ([#15811](https://github.com/can1357/oh-my-pi/issues/15811))
