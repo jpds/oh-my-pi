@@ -59,14 +59,44 @@ describe("GMI Cloud provider", () => {
 		const canonical = resolveModelReference(resold.id, index);
 		expect(recovered?.contextWindow).toBe(canonical?.contextWindow ?? null);
 		expect(recovered?.reasoning).toBe(true);
+		expect(recovered?.thinking?.mode).toBe("effort");
+		// ...but pricing is never borrowed across providers.
 		expect(recovered?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-		// ...but never the reference host's thinking ladder: ladders are
-		// host policy and provider KDL owns the discovered lane's dialect.
-		expect(recovered?.thinking).toBeUndefined();
 
 		// An id absent from every bundle stays bare rather than fabricating params.
 		const unknown = byId.get("gmi-only/nonexistent-model");
 		expect(unknown?.contextWindow).toBeNull();
 		expect(unknown?.reasoning).toBe(false);
+	});
+
+	// GMI's KDL only authors the seeded DeepSeek-V4-Flash ladder; dropping the
+	// reference's tiers would rebuild resold reasoning ids from class defaults.
+	test("discovery keeps the reference's thinking ladder for resold reasoning ids", async () => {
+		const index = getBundledModelReferenceIndex();
+		const resold = [...index.exact.values()].find(model => {
+			if (model.provider === "gmi-cloud" || !model.id.includes("/")) return false;
+			if (GMI_CLOUD_SEED_MODELS.some(seed => seed.id === model.id)) return false;
+			const ref = resolveModelReference(model.id, index);
+			return ref?.reasoning === true && ref.thinking?.mode === "effort" && (ref.contextWindow ?? 0) > 0;
+		});
+		if (!resold) {
+			throw new Error("no bundled resold reasoning model available to exercise canonical recovery");
+		}
+
+		const fetch = (async () =>
+			new Response(JSON.stringify({ object: "list", data: [{ id: resold.id, owned_by: "public" }] }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			})) as unknown as typeof globalThis.fetch;
+
+		const options = gmiCloudModelManagerOptions({ apiKey: "test-key", fetch });
+		const models = (await options.fetchDynamicModels?.()) ?? [];
+		const recovered = models.find(model => model.id === resold.id);
+		const canonical = resolveModelReference(resold.id, index);
+
+		expect(recovered?.reasoning).toBe(true);
+		// The exact copied ladder, not a generic class guess: every effort the
+		// reference authors must survive discovery.
+		expect(recovered?.thinking).toEqual(canonical?.thinking);
 	});
 });
