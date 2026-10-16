@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { Api, AssistantMessage, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
+import * as vm from "node:vm";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { AsyncJobManager } from "../../src/async";
@@ -10,6 +11,7 @@ import { Settings } from "../../src/config/settings";
 import { EVAL_HANDLE_CONCURRENCY, evalRequestSlots } from "../../src/eval/completion-bridge";
 import { disposeAllVmContexts } from "../../src/eval/js/context-manager";
 import { executeJs } from "../../src/eval/js/executor";
+import { JAVASCRIPT_PRELUDE_SOURCE } from "../../src/eval/js/shared/prelude";
 import {
 	type JudgmentBatchItem,
 	type JudgmentBatchStatus,
@@ -301,8 +303,8 @@ describe("judge_batch bridge", () => {
 		)) as JudgmentBatchStatus;
 
 		const items = await drain(session, created.id, 5_000);
-		expect(items.find(item => item.key === 0)?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
-		expect(items.find(item => item.key === 1)?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+		expect(items.find(item => item.key === "0")?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+		expect(items.find(item => item.key === "1")?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
 		expect(complete).toHaveBeenCalledTimes(2);
 		for (const [state, original] of [
 			["state-zero", IMAGE_ONE],
@@ -702,8 +704,8 @@ describe("judgeBatch() JS runtime", () => {
 				unknownImageError: string;
 			};
 			expect(report.items).toHaveLength(2);
-			expect(report.items.find(([key]) => key === 0)).toEqual([0, true, { tests: { type: "bool", bool: 1 } }]);
-			expect(report.items.find(([key]) => key === 1)?.[2]).toBe(
+			expect(report.items.find(([key]) => key === "0")).toEqual(["0", true, { tests: { type: "bool", bool: 1 } }]);
+			expect(report.items.find(([key]) => key === "1")?.[2]).toBe(
 				'images for input "1" must be an array of paths or image attachments',
 			);
 			expect(report.unknownImageError).toBe('images contains unknown input key "unknown"');
@@ -787,7 +789,6 @@ describe("judgeBatch() JS prelude", () => {
 		expect(drainCalls).toHaveLength(3);
 		expect(drainCalls[0]?.args.id).toBe("jdgb-1");
 		expect(drainCalls[0]?.args.timeoutMs).toBeLessThanOrEqual(30_000);
->>>>>>> 971f84fff0 (fix(eval): judge helper surface: list-form questions, unified shapes, labeled errors)
 	});
 });
 async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<PythonResult> {
