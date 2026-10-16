@@ -6,6 +6,9 @@
 
 - Improved nested tool status line rendering: moved preview content into a dedicated collapsible code block when expanded and limited field widths on the one-line summary
 - Suppressed typo highlighting for the word currently being typed to avoid distracting inline markers while composing
+### Added
+
+- `SettingsList` rows can be marked `declared` for values that come from the machine's declarative config layer; they render in `DECLARED_SETTING_COLOR` (overridable with `SettingsListTheme.declared`), and `SettingsHost.declared(path)` reports which rows those are.
 
 ### Fixed
 
