@@ -938,9 +938,12 @@ export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");
 }
 
-/** Get the tiny title model cache directory (~/.omp/agent/cache/tiny-models). */
+/** Get the tiny title model cache directory (~/.omp/agent/cache/tiny-models). `PI_TINY_MODELS_CACHE` overrides its location; relative values are ignored. */
 export function getTinyModelsCacheDir(agentDir?: string): string {
-	return dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache");
+	return (
+		resolveAbsoluteDir(process.env.PI_TINY_MODELS_CACHE) ??
+		dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache")
+	);
 }
 
 /** Get the document conversion cache directory (~/.omp/agent/cache/document-conversions; XDG default: $XDG_CACHE_HOME/omp/cache/document-conversions). */
