@@ -315,6 +315,7 @@ export interface ModelPatch {
 	thinking?: ThinkingConfig;
 	input?: ("text" | "image")[];
 	imageInputDecoder?: Model<Api>["imageInputDecoder"];
+	imageCountBudget?: number;
 	tokenizer?: Model<Api>["tokenizer"];
 	supportsTools?: boolean;
 	cost?: Partial<Model<Api>["cost"]>;
@@ -361,6 +362,7 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 	if (patch.input !== undefined) result.input = patch.input;
 	if (patch.tokenizer !== undefined) result.tokenizer = patch.tokenizer;
 	if (patch.imageInputDecoder !== undefined) result.imageInputDecoder = patch.imageInputDecoder;
+	if (patch.imageCountBudget !== undefined) result.imageCountBudget = patch.imageCountBudget;
 	if (patch.supportsTools !== undefined) result.supportsTools = patch.supportsTools;
 	if (patch.promptCache !== undefined) {
 		result.promptCache = patch.promptCache;

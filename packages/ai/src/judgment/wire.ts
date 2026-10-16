@@ -6,7 +6,7 @@
 import type { JudgmentConfig } from "@oh-my-pi/pi-catalog/types";
 import * as AIError from "../error";
 import { isRecord } from "@oh-my-pi/pi-utils";
-import type { Usage } from "../types";
+import type { ImageContent, Usage } from "../types";
 import { type JudgmentRequest, type Questions, type WireQuestions, tokenUsage } from "./types";
 
 /** Where one attempt posts and which bearer token it sends. */
@@ -41,7 +41,25 @@ export interface JudgmentImageInput {
 	maxTotalBytes?: number;
 	/** Pixels per image, when the image header reports dimensions. */
 	maxPixels?: number;
+	/** Minimum pixels per image, when the image header reports dimensions. */
+	minPixels?: number;
+	/** Inclusive bounds on each side, when the image header reports dimensions. */
+	minSide?: number;
+	maxSide?: number;
 }
+
+/** Shared TypeSafe Jev/OpenRouter image limits (https://docs.typesafe.ai/images#limits); out-of-range images are rejected upstream, never resized. */
+export const JEV_IMAGE_INPUT = {
+	mimeTypes: ["image/png", "image/jpeg"],
+	maxBytes: 16 * 1024 * 1024,
+	minPixels: 78_400,
+	maxPixels: 2_458_624,
+	minSide: 280,
+	maxSide: 1568,
+} as const satisfies JudgmentImageInput;
+
+/** Image assets kept separately from judgment state for asset-aware native wires. */
+export type JudgmentImageAssets = Readonly<Record<string, ImageContent>>;
 
 /** How one judgment API addresses, encodes, and decodes a request. */
 export interface JudgmentWire {
@@ -50,17 +68,23 @@ export interface JudgmentWire {
 	 * Throws when the credential cannot address the endpoint (e.g. no account id).
 	 */
 	target(baseUrl: string, model: string, key: string): JudgmentTarget;
-	/** Request body for `model`. */
-	encode(request: JudgmentRequest<Questions | WireQuestions>, model: string): unknown;
+	/** Request body for `model`, with optional asset context for dialects that preserve references. */
+	encode(request: JudgmentRequest<Questions | WireQuestions>, model: string, imageAssets?: JudgmentImageAssets): unknown;
+	/** Headers this dialect adds to requests that carry images. */
+	imageHeaders?: Readonly<Record<string, string>>;
 	/** Image input this dialect accepts; absent means text-only. */
 	images?: JudgmentImageInput;
+	/** Whether raw asset maps can be transported without loss by this dialect. */
+	supportsImageAssets?: boolean;
+	/** Whether image support must be enabled explicitly for direct NativeJudge construction. */
+	imagesRequireOptIn?: boolean;
 	/**
 	 * The response's answers and usage for the `questions` asked; `undefined`
 	 * when the payload is not this API's response shape. A dialect whose answer
 	 * discriminator is renamed by a `judgment` override compares against
 	 * `questions` to normalize the wire answers back to their canonical types.
 	 */
-	decode(payload: unknown, questions: Questions): DecodedJudgment | undefined;
+	decode(payload: unknown, questions?: Questions): DecodedJudgment | undefined;
 }
 
 /** `value` when it is a finite number. */
@@ -141,9 +165,9 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				token: innerTarget.token,
 			};
 		},
-		encode(request: JudgmentRequest<Questions>, model) {
+		encode(request: JudgmentRequest<Questions>, model: string, imageAssets?: JudgmentImageAssets) {
 			if (typeMap === undefined && typeField === "type") {
-				return inner.encode(request, model);
+				return inner.encode(request, model, imageAssets);
 			}
 			const wireQuestions: WireQuestions = Object.create(null);
 			for (const id in request.questions) {
@@ -157,7 +181,7 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				wireQuestions[id] = wireQuestion;
 			}
 			// Validated wire question envelope: wire-mapped discriminators replace canonical question types.
-			return inner.encode({ state: request.state, questions: wireQuestions }, model);
+			return inner.encode({ state: request.state, questions: wireQuestions }, model, imageAssets);
 		},
 		decode(payload, questions) {
 			const decoded = inner.decode(payload, questions);
