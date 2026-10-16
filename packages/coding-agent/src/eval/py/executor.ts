@@ -38,7 +38,12 @@ import {
 	type PythonPreludeSource,
 } from "./kernel";
 import { resolveExplicitPythonRuntime } from "./runtime";
-import { ensurePyToolBridge, registerPyToolBridge } from "./tool-bridge";
+import {
+	ensurePyToolBridge,
+	callSessionToolPromptOnAbort,
+	lookupPyToolBridgeEntryByRun,
+	registerPyToolBridge,
+} from "./tool-bridge";
 
 export type PythonKernelMode = "session" | "per-call";
 
@@ -233,13 +238,27 @@ function createCancelledPythonResult(timedOut: boolean, timeoutMs?: number): Pyt
 
 async function startKernel(cwd: string, options: PythonExecutorOptions): Promise<PythonKernel> {
 	requireRemainingTimeoutMs(options.deadlineMs);
-	return await PythonKernel.start({
+	const kernel = await PythonKernel.start({
 		cwd,
 		env: buildManagedKernelEnv(options),
 		signal: options.signal,
 		deadlineMs: options.deadlineMs,
 		interpreter: options.interpreter,
 	});
+	// Judge (and other host-mediated) requests ride the runner's stdio control
+	// channel, so the provider credential stays in the host process and never
+	// enters the kernel.
+	kernel.setHostRequestHandler(async frame => {
+		const runId = typeof frame.run === "string" ? frame.run : "";
+		const entry = lookupPyToolBridgeEntryByRun(runId);
+		if (!entry) {
+			throw new Error(
+				`${String(frame.name ?? "host request")} has no active eval tool session (run ${runId || "unknown"})`,
+			);
+		}
+		return await callSessionToolPromptOnAbort(String(frame.name ?? ""), frame.args, entry);
+	});
+	return kernel;
 }
 
 async function replaceSessionKernel(
@@ -384,8 +403,17 @@ async function ensureKernelAvailable(cwd: string, options: PythonExecutorOptions
 	}
 }
 
+/**
+ * `PI_NO_TOOL_BRIDGE=1` skips the HTTP bridge entirely; host-mediated helpers
+ * then run over the runner's stdio host-request channel instead.
+ */
+function toolBridgeDisabled(): boolean {
+	const raw = Bun.env.PI_NO_TOOL_BRIDGE?.trim().toLowerCase();
+	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 async function ensureToolBridge(options: PythonExecutorOptions): Promise<void> {
-	if (!options.toolSession || options.bridge) return;
+	if (!options.toolSession || options.bridge || toolBridgeDisabled()) return;
 	try {
 		options.bridge = await ensurePyToolBridge();
 	} catch (err) {

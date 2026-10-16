@@ -496,19 +496,20 @@ export async function executeWithKernelBase<
 	// the cell open across a critical phase (isolation worktree setup,
 	// merge/cherry-pick) so a cancel can't settle it on top of a half-applied
 	// git operation.
-	const unregisterBridge =
-		options?.toolSession && options?.bridgeSessionId
-			? registerPyToolBridge(options.bridgeSessionId, runId, {
-					toolSession: options.toolSession,
-					signal: options.signal,
-					shieldedSignal: abortShield.signal,
-					emitStatus,
-					shadowCell: getActiveEvalShadowCell(),
-					abortRequested: () => {
-						return abortShield.abortRequested;
-					},
-				})
-			: null;
+	// Registered whenever a tool session exists: the HTTP bridge and the
+	// runner's stdio host-request channel both resolve the entry by run id.
+	const unregisterBridge = options?.toolSession
+		? registerPyToolBridge(options.bridgeSessionId ?? "", runId, {
+				toolSession: options.toolSession,
+				signal: options.signal,
+				shieldedSignal: abortShield.signal,
+				emitStatus,
+				shadowCell: getActiveEvalShadowCell(),
+				abortRequested: () => {
+					return abortShield.abortRequested;
+				},
+			})
+		: null;
 
 	try {
 		if (remainingMs !== undefined && remainingMs <= 0) {

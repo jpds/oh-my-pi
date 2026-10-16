@@ -186,6 +186,7 @@
 - Extensions can observe and answer the interactive plan review, including refinement feedback and save-and-quit ([#14250](https://github.com/can1357/oh-my-pi/pull/14250) by [@rlfleming93](https://github.com/rlfleming93))
 - Added opt-in `omp gc --compress` (or `gc.compress`), which stores sessions idle for `gc.compressAfterDays` (default 7) with filesystem transparent compression (APFS, NTFS); they stay resumable and searchable ([#15600](https://github.com/can1357/oh-my-pi/pull/15600) by [@wolfiesch](https://github.com/wolfiesch))
 - Extensions can reopen a dismissed plan review while the session is idle (`ctx.openPlanReview()`) and pick the execution tier on `ctx.resolvePlanReview` (`input.role`); `plan_review_requested` now reports the slider's tiers ([#15552](https://github.com/can1357/oh-my-pi/pull/15552) by [@Shadorain](https://github.com/Shadorain))
+- Added Munito as a `/login` API-key provider (`MUNITO_API_KEY`, regional hosts via `MUNITO_BASE_URL`) ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
 
 ### Changed
 
@@ -244,6 +245,9 @@
 - Fails unstructured task runs that conclude without a final message
 - Background task cards no longer stop updating once the agent ends its turn while the task is still running
 - Transparent images the model receives (small icons, oversized screenshots) keep their transparency instead of turning into a black square, and resized edges no longer pick up a dark fringe
+### Added
+
+- Added per-model (and provider-level) `judgment` overrides (`route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) so `typesafe`-family models can answer System One judgments on compatible endpoints such as the Vercel AI Gateway's `/v1/evaluate` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
 
 ## [18.10.1] - 2026-10-12
 
@@ -721,6 +725,7 @@
 - In Tern the spinner, elapsed time and intent share one activity line with the todo, which stays in place between turns, and the tok/s readout moves into the composer bar after the thinking level
 - Computer-use desktop captures now default to the focused window's monitor, with primary-monitor fallback; `computer.display: all` remains available explicitly.
 - Computer-use guidance selects AX for semantic controls and screenshots for custom-drawn surfaces, with grouped actions and explicit state verification.
+- `judge_batch`/`judgeBatch` consumption is consistent: `results()` returns `{key: item}` in the same item shape `drain()` yields (successes and failures; was `{key: answers}`), Python `JudgmentItem` is a dict so `json.dumps(list(b.drain()))` and `json.dumps(b.results())` work, `drain()` always returns a list, and the Python batch is awaitable so `await judge_batch(...)` also works
 - Bash commands that print binary or other non-UTF-8 output no longer stall while their output is decoded ([#14454](https://github.com/can1357/oh-my-pi/pull/14454) by [@H4vC](https://github.com/H4vC))
 - Edit previews stay responsive while long edits stream, and `read` parses large files for block context off the main thread ([#14520](https://github.com/can1357/oh-my-pi/pull/14520) by [@H4vC](https://github.com/H4vC))
 - While a `sloppy`-mode edit streams, its preview no longer guesses an edit for a `*** Find` whose `*** Replace` has not arrived yet; the preview of an earlier file section that ends in a bare `*** Find` still matches what will be applied ([#14520](https://github.com/can1357/oh-my-pi/pull/14520) by [@H4vC](https://github.com/H4vC))
@@ -740,6 +745,8 @@
 - Fixed snapcompact archives stopping at 17 frames on models that read 1568px frames (OpenAI, Codex, and Claude before Opus 4.7); they now keep 26 under the same 3 MB image payload cap, and an archive whose frames run heavier than estimated is re-rendered with fewer frames instead of being rejected ([#14277](https://github.com/can1357/oh-my-pi/pull/14277) by [@will-bogusz](https://github.com/will-bogusz)).
 - Preserved original-detail image pixels through both Eval runtimes instead of resizing screenshots again and requiring model-side coordinate conversion.
 - Retired queued and in-flight native input on computer-run cancellation and teardown, including unawaited operations, without canceling later runs.
+- `judge()`/`judgeBatch()` questions accept a list of `{id, ...question}` entries keyed on the embedded id, and a wrong shape fails with a message stating the expected one instead of an opaque kernel TypeError
+- `eval` cells no longer have to repeat `language` every call: an omitted language reuses the last language the session ran (first enabled language otherwise)
 - Fixed the `/usage` sheet in Tern missing the Close button the other report sheets have ([#14455](https://github.com/can1357/oh-my-pi/pull/14455) by [@H4vC](https://github.com/H4vC)).
 - Fixed a browser page load abandoned by cancelling a run still replacing the page afterwards; the cancelled load is now stopped, so a run that had taken over request interception also returns at once instead of failing with "Failed to restore browser request interception". Cancelling a run that is not navigating leaves the page's in-flight requests alone ([#14425](https://github.com/can1357/oh-my-pi/pull/14425) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed cancelling a bash command on Windows sometimes terminating an unrelated program ([#14454](https://github.com/can1357/oh-my-pi/pull/14454) by [@H4vC](https://github.com/H4vC))
@@ -795,6 +802,43 @@
 - Fixed `omp worktree add` and other git operations failing with `git open: … does not appear to be a git repository` when the checkout directory name ends in `.git` ([#14553](https://github.com/can1357/oh-my-pi/issues/14553))
 - Fixed Mnemopi embedding workers (and other local-model workers) staying alive and holding gigabytes of RAM after the omp process that started them exited mid-embedding ([#14340](https://github.com/can1357/oh-my-pi/issues/14340))
 - Fixed a supervised PTY service on Windows hanging when it asks the terminal for the cursor position; the launch broker now answers the query as it does on Linux and macOS
+
+### Added
+
+- Eval kernels reach host-mediated helpers without the tool bridge: the Python runner forwards `judge`, `judge_batch`, `completion()`, `agent()`, `tool.*`, and the other helpers to the host over its stdio control channel, so they work in sandboxes that refuse loopback TCP and no provider credential ever enters the kernel process.
+- `PI_NO_TOOL_BRIDGE=1` skips the eval HTTP tool bridge (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers then run over the runner's stdio channel instead of failing with a typed error.
+
+### Changed
+
+- Python `judge`/`judge_batch` calls are host-mediated like JS: batches are host-owned jobs, so `wait`, completion auto-delivery, `agent://` addressing, and `status().cost` apply to them.
+- Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
+- The `Python tool bridge listening` line is now durable (info-level) and the stop is logged too, so an unreachable bridge is diagnosable from the session log.
+- `judge_batch`/`judgeBatch` item keys are strings in both runtimes: `drain()` tuples, `item.key`, and the `results()`/`failed()` dict keys now agree for list-form states, whose indices were numbers in `drain()` and strings in `results()`.
+
+### Added
+
+- Eval kernels reach host-mediated helpers without the tool bridge: the Python runner forwards `judge`, `judge_batch`, `completion()`, `agent()`, `tool.*`, and the other helpers to the host over its stdio control channel, so they work in sandboxes that refuse loopback TCP and no provider credential ever enters the kernel process.
+- `PI_NO_TOOL_BRIDGE=1` skips the eval HTTP tool bridge (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers then run over the runner's stdio channel instead of failing with a typed error.
+
+### Changed
+
+- Python `judge`/`judge_batch` calls are host-mediated like JS: batches are host-owned jobs, so `wait`, completion auto-delivery, `agent://` addressing, and `status().cost` apply to them.
+- Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
+- The `Python tool bridge listening` line is now durable (info-level) and the stop is logged too, so an unreachable bridge is diagnosable from the session log.
+- `judge_batch`/`judgeBatch` item keys are strings in both runtimes: `drain()` tuples, `item.key`, and the `results()`/`failed()` dict keys now agree for list-form states, whose indices were numbers in `drain()` and strings in `results()`.
+
+### Fixed
+
+- Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
+- The `judge_batch`/`judgeBatch` reference names each runtime's helpers (`judge_batch`/`judgeBatch`, `drain_iter`/`drainIter`) instead of hiding the JS names when Python is also enabled, and notes that JS batch methods return Promises.
+- `judge_batch`/`judgeBatch` `drain()` no longer raises `judge_batch cancelled` for a cancelled run that still met `min_ok`; `cancel()` stops further dispatch (in-flight items finish, unstarted ones settle as `cancelled`).
+- `judge_batch`/`judgeBatch` `status().elapsedS` freezes when the run settles instead of reporting time since start.
+### Fixed
+
+- Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
+- The `judge_batch`/`judgeBatch` reference names each runtime's helpers (`judge_batch`/`judgeBatch`, `drain_iter`/`drainIter`) instead of hiding the JS names when Python is also enabled, and notes that JS batch methods return Promises.
+- `judge_batch`/`judgeBatch` `drain()` no longer raises `judge_batch cancelled` for a cancelled run that still met `min_ok`; `cancel()` stops further dispatch (in-flight items finish, unstarted ones settle as `cancelled`).
+- `judge_batch`/`judgeBatch` `status().elapsedS` freezes when the run settles instead of reporting time since start.
 
 ## [18.6.2] - 2026-10-04
 

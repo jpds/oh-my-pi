@@ -7,12 +7,13 @@ const pythonPath = Bun.env.PYTHON ?? ($which("python3") ? "python3" : "python");
 async function runPrelude(
 	code: string,
 	env: Record<string, string>,
+	setup?: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 	const prelude = PYTHON_PRELUDE.replace(
 		"from __future__ import annotations",
 		"from __future__ import annotations\n__omp_display = lambda *args, **kwargs: None",
 	);
-	const script = `${prelude}\n${code}`;
+	const script = setup ? `${prelude}\n${setup}\n${code}` : `${prelude}\n${code}`;
 	// The full prelude exceeds Windows' ~32k `python -c` command-line limit
 	// (ENAMETOOLONG); a script file behaves identically on every platform.
 	const dir = await TempDir.create("@omp-py-prelude-");
@@ -285,5 +286,244 @@ describe("python prelude", () => {
 			bridge.stop(true);
 			proxy.stop(true);
 		}
+	});
+});
+describe("python host-mediated judgment (runner stdio channel)", () => {
+	// The runner injects `__omp_host_bridge__(name, args)`; a kernel with no
+	// HTTP tool bridge reaches every host-mediated helper through it. Stub it in
+	// the prelude's own namespace so the standalone script exercises the real
+	// dispatch path without a host process.
+	const CHANNEL_SETUP = [
+		"__omp_calls__ = []",
+		"__omp_settled__ = [",
+		'    {"key": "0", "answers": {"q": {"type": "bool", "bool": 1}}, "model": "typesafe/jev-preview"},',
+		'    {"key": "1", "answers": {"q": {"type": "bool", "bool": 0}}, "model": "typesafe/jev-preview"},',
+		"]",
+		"__omp_drains__ = [0]",
+		"def __omp_host_bridge__(name, args):",
+		"    __omp_calls__.append((name, args))",
+		'    if name == "__judge__":',
+		'        return {"answers": {"q": {"type": "bool", "bool": 1}}, "model": "typesafe/jev-preview"}',
+		'    if name == "__judge_batch__":',
+		'        op = args.get("op")',
+		'        if op in ("create", "attach"):',
+		'            return {"id": "jdgb-stub", "total": len(__omp_settled__), "intent": args.get("intent") or "Judging"}',
+		'        if op == "drain":',
+		"            seen = __omp_drains__[0]",
+		"            __omp_drains__[0] = seen + 1",
+		'            return {"items": __omp_settled__ if seen == 0 else []}',
+		'        if op == "results":',
+		'            return {"results": {item["key"]: item for item in __omp_settled__}}',
+		'        if op == "failed":',
+		'            return {"failed": {item["key"]: item["error"] for item in __omp_settled__ if item.get("error")}}',
+		'        if op == "status":',
+		'            return {"intent": "Judging", "done": 2, "total": 2, "failed": 0, "cost": 0.0004, "running": False}',
+		'        if op == "cancel":',
+		'            return {"cancelled": True}',
+		"        return {}",
+	].join("\n");
+
+	it("judge() forwards cell questions over the runner channel and returns the host answers", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				'    answers = await judge("hello", {"q": {"type": "bool", "instructions": "non-empty?"}})',
+				'    print(json.dumps({"answers": answers, "calls": __omp_calls__}, sort_keys=True))',
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			answers: { q: { type: "bool", bool: 1 } },
+			calls: [["__judge__", { state: "hello", questions: { q: { type: "bool", instructions: "non-empty?" } } }]],
+		});
+	});
+
+	it("judge_batch() drives the host run over the runner channel and wraps its items", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				'    b = judge_batch(["one", "two"], {"q": {"type": "bool", "instructions": "non-empty?"}}, intent="Triage")',
+				"    drained = []",
+				"    while True:",
+				"        got = await b.drain(timeout=10)",
+				"        if not got:",
+				"            break",
+				"        drained += got",
+				"    print(json.dumps({",
+				'        "id": b.id,',
+				'        "drain_keys": [k for k, _ in drained],',
+				'        "item_keys": [item["key"] for _, item in drained],',
+				'        "ok": [item.ok for _, item in drained],',
+				'        "answers": [item.answers for _, item in drained],',
+				'        "results": sorted(b.results().keys()),',
+				'        "failed": b.failed(),',
+				'        "cost": b.status()["cost"],',
+				'        "attach": judge_batch.attach(b.id).id,',
+				'        "cancelled": b.cancel(),',
+				'        "ops": [args["op"] for _, args in __omp_calls__],',
+				'        "create_args": __omp_calls__[0][1],',
+				"    }, sort_keys=True))",
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			id: "jdgb-stub",
+			drain_keys: ["0", "1"],
+			item_keys: ["0", "1"],
+			ok: [true, true],
+			answers: [{ q: { type: "bool", bool: 1 } }, { q: { type: "bool", bool: 0 } }],
+			results: ["0", "1"],
+			failed: {},
+			cost: 0.0004,
+			attach: "jdgb-stub",
+			cancelled: true,
+			ops: ["create", "drain", "drain", "results", "failed", "status", "attach", "cancel"],
+			create_args: {
+				op: "create",
+				items: [
+					{ key: "0", state: "one" },
+					{ key: "1", state: "two" },
+				],
+				questions: { q: { type: "bool", instructions: "non-empty?" } },
+				intent: "Triage",
+			},
+		});
+	});
+
+	it("prefers the configured HTTP tool bridge over the runner channel", async () => {
+		// A configured bridge wins even when it is dead: the call fails with the
+		// typed bridge error instead of silently falling back to the channel.
+		const result = await runPrelude(
+			[
+				"async def main():",
+				"    try:",
+				'        await judge("hello", {"q": {"type": "bool", "instructions": "non-empty?"}})',
+				'        print("NO ERROR (BAD)")',
+				"    except RuntimeError as exc:",
+				"        print(json.dumps({",
+				'            "bridged": "eval tool bridge unreachable" in str(exc),',
+				'            "channel_calls": len(__omp_calls__),',
+				"        }, sort_keys=True))",
+				"asyncio.run(main())",
+			].join("\n"),
+			{
+				PI_TOOL_BRIDGE_URL: "http://127.0.0.1:1",
+				PI_TOOL_BRIDGE_TOKEN: "test-token",
+				PI_TOOL_BRIDGE_SESSION: "test-session",
+			},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({ bridged: true, channel_calls: 0 });
+	});
+
+	it("rejects malformed list-form questions before reaching the channel", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				"    errors = []",
+				"    for questions in (",
+				'        [{"type": "bool", "instructions": "x"}],',
+				'        [{"id": "a", "type": "bool", "instructions": "x"}, {"id": "a", "type": "bool", "instructions": "y"}],',
+				"        [],",
+				"    ):",
+				"        try:",
+				'            await judge("hello", questions)',
+				'            errors.append("no-error")',
+				"        except TypeError as exc:",
+				"            errors.append(str(exc))",
+				'    print(json.dumps({"errors": errors, "channel_calls": len(__omp_calls__)}, sort_keys=True))',
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			errors: [
+				'question entry 0 must carry a non-empty string "id" (or pass questions as a dict keyed by id)',
+				'duplicate question id "a"',
+				"judge() received invalid arguments: questions must contain at least one question",
+			],
+			channel_calls: 0,
+		});
+	});
+
+	it("names the calling helper when a host-mediated helper lacks the bridge", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				"    errors = []",
+				"    async def label(call):",
+				"        try:",
+				"            await call()",
+				'            errors.append("no-error")',
+				"        except RuntimeError as exc:",
+				'            errors.append(str(exc).split(" cannot run:")[0])',
+				'    await label(lambda: tool.read({"path": "x"}))',
+				'    await label(lambda: _omp_prelude("omp_find", {}))',
+				'    await label(lambda: wait([_Handle("missing")], timeout=0))',
+				"    for start in (lambda: completion('hi'), lambda: agent('hi')):",
+				"        try:",
+				"            start()",
+				'            errors.append("no-error")',
+				"        except RuntimeError as exc:",
+				'            errors.append(str(exc).split(" cannot run:")[0])',
+				"    print(json.dumps(errors))",
+				"",
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		const errors = JSON.parse(result.stdout.trim());
+		// Each surface reports the helper the cell actually called, not a generic bridge error.
+		expect(errors).toEqual(["tool.read(...)", "omp_find() prelude helper", "wait()", "completion()", "agent()"]);
+	});
+
+	it("judges over the channel with no credential in the kernel", async () => {
+		// The host holds the judge transport: the cell sees no PI_JUDGE_DIRECT
+		// and no descriptor-returning accessor, only the call-only channel.
+		const result = await runPrelude(
+			[
+				"import os as _os",
+				"async def main():",
+				'    answers = await judge("hello", {"q": {"type": "bool", "instructions": "non-empty?"}})',
+				"    print(json.dumps({",
+				'        "answers": answers,',
+				'        "judge_env": _os.environ.get("PI_JUDGE_DIRECT"),',
+				'        "accessor": "__omp_judge_direct__" in globals(),',
+				'        "channel": callable(globals().get("__omp_host_bridge__")),',
+				"    }, sort_keys=True))",
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+			CHANNEL_SETUP,
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			answers: { q: { type: "bool", bool: 1 } },
+			judge_env: null,
+			accessor: false,
+			channel: true,
+		});
 	});
 });

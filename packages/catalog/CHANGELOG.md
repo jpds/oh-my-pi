@@ -62,6 +62,8 @@
 - Fixed Devin Fusion pairings ignoring their lead model's rules, including its cache-write rate and long-context tier ([#14891](https://github.com/can1357/oh-my-pi/pull/14891) by [@eggpeat](https://github.com/eggpeat)).
 - Fixed Kilo and NanoGPT models showing stale or missing prices (for example Gemini 4 Argon at $4/$20 instead of $2/$10, and many models at $0); prices now come from each gateway's live model list ([#15623](https://github.com/can1357/oh-my-pi/pull/15623) by [@eggpeat](https://github.com/eggpeat))
 - Fixed NanoGPT models showing their raw id as the name and no context window (disabling auto-compaction) when the bundled catalog lacked them; names, context windows and output limits now come from NanoGPT's live model list ([#15623](https://github.com/can1357/oh-my-pi/pull/15623) by [@eggpeat](https://github.com/eggpeat))
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models with a KDL-driven `judgment` contract ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added Munito (`munito`) as an open-model provider: OpenAI-compatible chat completions at `api.munito.ai/inference/v1` with keyless-authoritative `/models` discovery, canonical-reference hydration, and `omp login munito` ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
 
 ### Removed
 
@@ -104,6 +106,11 @@
 ### Added
 
 - Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+### Added
+
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models (e.g. `vercel-ai-gateway/typesafe-ai/jev`); the catalog supplies their `/v1/evaluate` judgment defaults at build time, so no user config is needed ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added `Model.judgment` (`JudgmentConfig`: `route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) declaring per-model System One judgment endpoint overrides, honored for custom providers and `modelOverrides` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added TypeSafe `jev-1.13` / `jev-1.13-free` judge seeds on the OpenCode Zen gateway (`api: typesafe` under the gateway root) ([#14446](https://github.com/can1357/oh-my-pi/pull/14446) by [@jpds](https://github.com/jpds)).
 
 ## [18.10.0] - 2026-10-12
 
@@ -141,6 +148,11 @@
 ### Fixed
 
 - Fixed Devin's discovered models not marking the account's default model, the one Devin's own CLI starts the account on (SWE-2 High on Pro, SWE-1.6 Slow on Free); when it is an effort lane of a family, the family starts at that effort. Cursor's discovered models no longer carry that marker, so Cursor keeps its existing startup selection ([#15115](https://github.com/can1357/oh-my-pi/pull/15115) by [@will-bogusz](https://github.com/will-bogusz))
+### Added
+
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models (e.g. `vercel-ai-gateway/typesafe-ai/jev`); the catalog supplies their `/v1/evaluate` judgment defaults at build time, so no user config is needed ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added `Model.judgment` (`JudgmentConfig`: `route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) declaring per-model System One judgment endpoint overrides, honored for custom providers and `modelOverrides` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added TypeSafe `jev-1.13` / `jev-1.13-free` judge seeds on the OpenCode Zen gateway (`api: typesafe` under the gateway root) ([#14446](https://github.com/can1357/oh-my-pi/pull/14446) by [@jpds](https://github.com/jpds)).
 
 ## [18.8.7] - 2026-10-09
 

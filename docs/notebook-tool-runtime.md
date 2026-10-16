@@ -126,6 +126,8 @@ Kernel startup and per-execution environment patching can receive:
 
 The runner applies the requested cwd and managed environment patch before each cell, with cwd placed first on `sys.path`. A `%cd` or `os.chdir()` inside a cell does not override the host session cwd for the next eval call. Managed entries omitted from the patch are removed from `os.environ`.
 
+Host-mediated helpers (`judge`, `judge_batch`, `completion()`, `agent()`, `tool.*`, prelude helpers, workpool, budget) run over the HTTP tool bridge when `PI_TOOL_BRIDGE_URL` is present and over the runner's stdio control channel otherwise: the runner emits a `host_request` frame carrying the calling run id, and the host resolves that run's tool session and answers with `host_response`/`host_error`. No provider credential ever enters the kernel process, and a host that refuses loopback TCP still reaches every helper. Setting `PI_NO_TOOL_BRIDGE=1` on the host skips the loopback bridge entirely (no bind, no `PI_TOOL_BRIDGE_*` env); helpers then run over the channel.
+
 ## 5) Streaming/chunk and display handling (kernel-backed path)
 
 The Python backend uses an NDJSON subprocess runner. The host processes frames per execution:

@@ -21,7 +21,7 @@
  */
 import { resolveJudgmentQuestionsMax } from "@oh-my-pi/pi-catalog/compat/judgment-questions";
 import { TYPESAFE_DEFAULT_BASE_URL } from "@oh-my-pi/pi-catalog/discovery";
-import type { Api, FetchImpl } from "@oh-my-pi/pi-catalog/types";
+import type { Api, FetchImpl, JudgmentConfig } from "@oh-my-pi/pi-catalog/types";
 import { $env, isRecord, parseImageMetadata } from "@oh-my-pi/pi-utils";
 import { type ApiKey, withAuth } from "../auth-retry";
 import * as AIError from "../error";
@@ -38,7 +38,7 @@ import {
 	type Questions,
 	tokenUsage,
 } from "./types";
-import type { JudgmentImageInput, JudgmentWire } from "./wire";
+import { decorateJudgmentWire, type JudgmentImageInput, type JudgmentWire } from "./wire";
 
 export const TYPESAFE_PROVIDER = "typesafe";
 export const TYPESAFE_DEFAULT_MODEL = "jev-latest";
@@ -117,6 +117,12 @@ export interface NativeJudgeOptions extends NativeJudgeConnection {
 	 * a `true` value cannot enable a wire dialect that does not support images.
 	 */
 	supportsImages?: boolean;
+	/**
+	 * Per-model judgment endpoint overrides (route, type/value key maps, usage
+	 * keys). Only System One dialects accept them; the API's own dialect is used
+	 * verbatim when absent.
+	 */
+	judgment?: JudgmentConfig;
 }
 
 /** Per-call options for {@link NativeJudge.judge}. */
@@ -210,7 +216,14 @@ export class NativeJudge implements Judge {
 	constructor(options: NativeJudgeOptions) {
 		this.#apiKey = options.apiKey;
 		this.api = options.api ?? TYPESAFE_PROVIDER;
-		this.#wire = JUDGMENT_WIRES[this.api];
+		const wire = JUDGMENT_WIRES[this.api];
+		if (options.judgment && wire === openaiDecisionsWire) {
+			throw new AIError.ConfigurationError(`${this.api} does not support judgment overrides`);
+		}
+		if (options.judgment?.route !== undefined && wire === workersAiWire) {
+			throw new AIError.ConfigurationError(`${this.api} does not support judgment route override`);
+		}
+		this.#wire = decorateJudgmentWire(wire, options.judgment);
 		this.provider = options.provider ?? TYPESAFE_PROVIDER;
 		this.baseUrl = (options.baseUrl ?? typesafeBaseUrl()).replace(/\/+$/, "");
 		this.model = options.model ?? typesafeModel();
@@ -255,7 +268,7 @@ export class NativeJudge implements Judge {
 	): Promise<JudgmentResult<Q>> {
 		const chunks: Questions[] = [];
 		for (let start = 0; start < ids.length; start += cap) {
-			const questions: Questions = {};
+			const questions: Questions = Object.create(null);
 			for (const id of ids.slice(start, start + cap)) questions[id] = request.questions[id];
 			chunks.push(questions);
 		}
@@ -277,7 +290,7 @@ export class NativeJudge implements Judge {
 		};
 		// Settle every worker, not just the first failure, so no sibling's billed result goes uncounted.
 		await Promise.allSettled(Array.from({ length: Math.min(CHUNK_PARALLEL, chunks.length) }, drain));
-		const answers: Record<string, Answer> = {};
+		const answers: Record<string, Answer> = Object.create(null);
 		let settled = 0;
 		let input = 0;
 		let output = 0;
@@ -285,7 +298,10 @@ export class NativeJudge implements Judge {
 		for (const result of results) {
 			if (result === undefined) continue;
 			settled++;
-			Object.assign(answers, result.answers);
+			for (const id in result.answers) {
+				if (!Object.hasOwn(result.answers, id)) continue;
+				answers[id] = result.answers[id];
+			}
 			input += result.usage.input;
 			output += result.usage.output;
 			cost += result.usage.cost.total;
@@ -311,15 +327,16 @@ export class NativeJudge implements Judge {
 		const body = JSON.stringify(this.#wire.encode(request, this.model));
 		const signal = options?.signal;
 		const payload = await withAuth(this.#apiKey, key => this.#attempt(body, key, signal), { signal });
-		const decoded = this.#wire.decode(payload);
+		const decoded = this.#wire.decode(payload, request.questions);
 		if (!decoded) {
 			throw new AIError.ProviderResponseError(`${this.label} returned a malformed judgment response`, {
 				provider: this.provider,
 				kind: "envelope",
 			});
 		}
-		const answers: Record<string, Answer> = {};
+		const answers: Record<string, Answer> = Object.create(null);
 		for (const id in request.questions) {
+			if (!Object.hasOwn(request.questions, id)) continue;
 			const type = request.questions[id].type;
 			if (decoded.refused.includes(id)) {
 				throw new AIError.ProviderResponseError(`${this.label} refused to answer question "${id}"`, {
@@ -402,5 +419,6 @@ export function createNativeJudge(model: Model, connection: NativeJudgeConnectio
 		baseUrl: model.baseUrl,
 		maxQuestions: resolveJudgmentQuestionsMax(model),
 		supportsImages: nativeJudgmentSupportsImages(model),
+		judgment: model.judgment,
 	});
 }
