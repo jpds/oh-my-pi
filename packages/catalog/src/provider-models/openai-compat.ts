@@ -598,10 +598,12 @@ function nanoGptPricingCost(pricing: unknown, fallback: TokenCost): TokenCost {
  * Canonical-reference recovery for resellers whose `/models` rows carry only
  * `id`/`owned_by`: an id bundled on the discovering provider hydrates through
  * {@link mapWithBundledReference}; anything else recovers intrinsic
- * capabilities (context window, output limit, reasoning, thinking) from the
+ * capabilities (context window, output limit, reasoning, modalities) from the
  * bundled canonical reference index (`recover-canonical-params` providers).
- * Identity, pricing, compat, and routes are never borrowed: a host with no
- * per-model tariff stays zeroed.
+ * Thinking is host policy, so the reference's ladder is never copied:
+ * provider KDL owns the effort ladder and wire dialect. Identity, pricing,
+ * and compat are never borrowed: a host with no per-model tariff stays
+ * zeroed.
  */
 export function mapCanonicalReferenceModel<TApi extends Api>(
 	entry: OpenAICompatibleModelRecord,
@@ -620,12 +622,17 @@ export function mapCanonicalReferenceModel<TApi extends Api>(
 		canonical.maxTokens != null && contextWindow != null
 			? Math.min(canonical.maxTokens, contextWindow)
 			: (canonical.maxTokens ?? defaults.maxTokens);
+	// `thinking` stays unset: ladders are host policy, and the canonical
+	// reference is another host's. An inherited explicit ladder would win
+	// `resolveThinkingPolicy` and defeat the provider's authored thinking
+	// rules; provider KDL resolves the wire dialect for discovered rows the
+	// same way it does for bundled ones.
 	return {
 		...defaults,
 		name: toModelName(entry.name, canonical.name ?? defaults.name),
 		reasoning: canonical.reasoning,
 		input: canonical.input,
-		...(canonical.thinking && { thinking: canonical.thinking }),
+
 		contextWindow,
 		maxTokens,
 	};
@@ -1252,6 +1259,13 @@ export interface GmiCloudModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+/**
+ * GMI's `/v1/models` returns only bare `{id}` rows with no capability
+ * metadata; {@link mapCanonicalReferenceModel} hydrates them. GMI's own
+ * bundled seed supplies the published tariff and limits. Pricing is never
+ * borrowed: GMI's per-model tariff is unknown for resold ids, so cost stays
+ * zeroed.
+ */
 export function gmiCloudModelManagerOptions(
 	config?: GmiCloudModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -5558,12 +5572,14 @@ export function resolveMunitoBaseUrl(config?: { baseUrl?: string }): string {
 }
 
 /**
- * Munito model-manager options. The regional endpoint from `config.baseUrl`
- * or `MUNITO_BASE_URL` covers discovery and cache identity; bundled rows
- * stay on the global host and are redirected at inference in
- * `packages/ai/src/providers/openai-shared.ts`. The endpoint is written back
- * into `config.baseUrl` because discovery requests `<baseUrl>/models`
- * verbatim.
+ * Munito model-manager options. `/models` is public (invalid keys still 401),
+ * so discovery runs keyless; the key gates inference, not the roster probe.
+ * A successful snapshot is authoritative over the bundled seed rows. The
+ * regional endpoint from `config.baseUrl` or `MUNITO_BASE_URL` covers
+ * discovery and cache identity; bundled rows stay on the global host and are
+ * redirected at inference in `packages/ai/src/providers/openai-shared.ts`.
+ * The endpoint is written back into `config.baseUrl` because discovery
+ * requests `<baseUrl>/models` verbatim.
  */
 export function munitoModelManagerOptions(
 	config?: MunitoModelManagerConfig,

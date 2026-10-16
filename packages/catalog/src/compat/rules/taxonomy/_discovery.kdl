@@ -7,9 +7,9 @@ discovery {
 	// window, output limit, thinking policy) from the bundled canonical
 	// reference index. OpenCode Go additionally recovers intrinsic parameters
 	// for its exact gateway-first Responses pins, whose bare ids otherwise carry
-	// no capability metadata. Munito's /models rows carry only
+	// no capability metadata. Munito's `/models` rows carry only
 	// `id`/`owned_by` for the upstream open models it hosts
-	// (qwen/…, deepseek-ai/…, zai-org/…).
+	// (qwen/…, deepseek-ai/…, zai-org/…) and hydrate the same way.
 	// Pricing, wire policy, and routes are never borrowed across providers.
 	recover-canonical-params "gmi-cloud" "opencode-go" "yolo-auto" "munito"
 	// The OpenCode gateways share one operator and ship models before any

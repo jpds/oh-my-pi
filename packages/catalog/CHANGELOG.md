@@ -6,6 +6,7 @@
 
 - Added `keep-bundled-names` catalog attribute to preserve static model display names during discovery
 - Updated `openai-codex` provider configuration to prevent model name regressions during live discovery
+- Added Munito (`munito`) as an open-model provider: OpenAI-compatible chat completions at `api.munito.ai/inference/v1` with keyless-authoritative `/models` discovery, canonical-reference hydration, and `omp login munito` ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
 
 ### Changed
 

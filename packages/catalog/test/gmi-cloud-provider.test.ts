@@ -59,9 +59,10 @@ describe("GMI Cloud provider", () => {
 		const canonical = resolveModelReference(resold.id, index);
 		expect(recovered?.contextWindow).toBe(canonical?.contextWindow ?? null);
 		expect(recovered?.reasoning).toBe(true);
-		expect(recovered?.thinking?.mode).toBe("effort");
-		// ...but pricing is never borrowed across providers.
 		expect(recovered?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+		// ...but never the reference host's thinking ladder: ladders are
+		// host policy and provider KDL owns the discovered lane's dialect.
+		expect(recovered?.thinking).toBeUndefined();
 
 		// An id absent from every bundle stays bare rather than fabricating params.
 		const unknown = byId.get("gmi-only/nonexistent-model");
