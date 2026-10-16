@@ -120,6 +120,7 @@
 - Fixed `read` ignoring JSON and JSONL `?q=` filters and pagination for `local://` and `artifact://` files ([#15767](https://github.com/can1357/oh-my-pi/issues/15767)).
 - Agents can now read saved context notes without accidentally clearing them ([#15748](https://github.com/can1357/oh-my-pi/pull/15748) by [@Komzpa](https://github.com/Komzpa))
 - Fixed startup without an explicit model picking an unrelated authenticated provider instead of the first available model in the configured default fallback chain ([#15781](https://github.com/can1357/oh-my-pi/pull/15781) by [@mvid](https://github.com/mvid))
+- Added `mnemopi.embeddingCacheDir`, pointing local embedding model loads (and the machine-shared embedding server keyed on them) at a specific fastembed cache dir instead of `~/.omp/cache/fastembed`. Intended for pinned model stores in images or containers: a read-only dir missing model files fails init with a warning rather than downloading, while a writable dir is populated on demand.
 
 ## [18.11.0] - 2026-10-14
 

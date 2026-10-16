@@ -41,6 +41,13 @@ export interface MnemopiEmbeddingRuntimeOptions {
 	provider?: MnemopiEmbeddingProvider | ((texts: readonly string[]) => EmbeddingOutput | Promise<EmbeddingOutput>);
 	/** Override `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS`. `0` disables the cap. See `config.embeddingMaxInputChars`. */
 	maxInputChars?: number;
+	/**
+	 * Directory fastembed caches local model files in (one `<repo_with_underscores>/` subdir
+	 * per model). Unset defers to `getFastembedCacheDir()`. Meant for pinned model stores
+	 * (images, containers): a read-only dir is never created, and a missing model file fails
+	 * init instead of letting the library re-download into the operator's path.
+	 */
+	cacheDir?: string;
 }
 
 export interface MnemopiLlmRuntimeOptions {
@@ -70,6 +77,7 @@ export interface ResolvedMnemopiEmbeddingRuntimeOptions {
 	apiKey?: ApiKey;
 	provider?: MnemopiEmbeddingProvider;
 	maxInputChars?: number;
+	cacheDir?: string;
 }
 
 export interface ResolvedMnemopiLlmRuntimeOptions {

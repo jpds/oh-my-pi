@@ -11,6 +11,9 @@
 ### Fixed
 
 - Fixed a failing `mnemopi` CLI command or MCP memory call dropping the embeddings of memories it had just stored ([#15804](https://github.com/can1357/oh-my-pi/pull/15804) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+### Added
+
+- Added `embeddings.cacheDir` to `MnemopiEmbeddingRuntimeOptions`, so an embedding provider can point local model loads at a specific fastembed cache dir.
 
 ## [18.11.0] - 2026-10-14
 

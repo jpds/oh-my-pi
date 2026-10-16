@@ -542,6 +542,7 @@ async function resolveMnemopiProviderOptions(
 		embeddingApiKey:
 			config.providerOptions.embeddingApiKey ??
 			(await openrouterKeyResolver(modelRegistry, sessionId, config.providerOptions.embeddingApiUrl)),
+		embeddings: config.providerOptions.embeddings,
 		llm: false,
 	};
 

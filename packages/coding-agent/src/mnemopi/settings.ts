@@ -99,6 +99,20 @@ export const cfgMnemopiEmbeddingVariant = register({
 	},
 });
 
+export const cfgMnemopiEmbeddingCacheDir = register({
+	id: "mnemopi.embeddingCacheDir",
+	type: "string",
+	default: undefined,
+	ui: {
+		tab: "memory",
+		group: "Mnemopi",
+		label: "Embedding cache dir",
+		description:
+			"Directory fastembed caches local embedding models in. Defaults to ~/.omp/cache/fastembed; set to a pinned model store (image or container) to avoid downloads; writable dirs are populated on demand, read-only dirs missing model files fail the init with a warning. omp neither creates nor writes a dir set here.",
+		condition: "mnemopiActive",
+	},
+});
+
 export const cfgMnemopiAutoRecall = register({
 	id: "mnemopi.autoRecall",
 	type: "boolean",
