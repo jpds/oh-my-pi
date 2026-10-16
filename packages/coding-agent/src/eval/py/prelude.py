@@ -4,7 +4,7 @@ from __future__ import annotations
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
-    import asyncio, collections.abc, contextvars, inspect, os, json, math, re, threading, time, types, typing
+    import asyncio, collections.abc, contextvars, inspect, os, json, math, re, threading, time, types, typing, uuid
     from urllib.parse import unquote
 
 
@@ -923,6 +923,36 @@ if "__omp_prelude_loaded__" not in globals():
             raise RuntimeError("completion() did not return a handle")
         return CompletionHandle(result["id"], schema)
 
+    # --- direct judgment (PI_JUDGE_DIRECT; no host bridge) -----------------
+    #
+    # Host injects the resolved native judge transport as PI_JUDGE_DIRECT JSON;
+    # `judge`/`judge_batch` then POST the provider directly. Without a
+    # descriptor they fall back to the host bridge, preserving judge-role
+    # chains with non-native candidates.
+
+    _JUDGE_MAX_ATTEMPTS = 3
+    _JUDGE_BACKOFF_BASE_S = 0.5
+    _JUDGE_BACKOFF_MAX_S = 5.0
+    _JUDGE_TIMEOUT_S = 10.0
+    _JUDGE_BATCH_CONCURRENCY = 32
+    _JUDGE_BATCH_DEFAULT_RETRIES = 1
+    _JUDGE_BATCH_DRAIN_COALESCE_S = 0.1
+
+    _JUDGE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def _judge_direct_descriptor() -> dict | None:
+        """Resolved native judge transport (PI_JUDGE_DIRECT JSON), or None."""
+        raw = os.environ.get("PI_JUDGE_DIRECT")
+        if not raw:
+            return None
+        try:
+            descriptor = json.loads(raw)
+        except json.JSONDecodeError:
+            raise RuntimeError("PI_JUDGE_DIRECT is not valid JSON") from None
+        if not isinstance(descriptor, dict):
+            raise RuntimeError("PI_JUDGE_DIRECT must be a JSON object")
+        return descriptor
+
     def _judge_invalid(detail: str) -> TypeError:
         return TypeError(f"judge() received invalid arguments: {detail}")
 
@@ -1498,11 +1528,11 @@ if "__omp_prelude_loaded__" not in globals():
                 raise TypeError("judge_batch() images must be a dict keyed by input key")
             item_keys = {item["key"] for item in items}
             for key in images:
-                if key not in item_keys:
+                if str(key) not in item_keys:
                     raise ValueError(f"images contains unknown input key {json.dumps(key)}")
             for item in items:
-                if item["key"] in images:
-                    item["images"] = images[item["key"]]
+                if item["key"] in {str(key) for key in images}:
+                    item["images"] = images[next(key for key in images if str(key) == item["key"])]
         if not items:
             raise TypeError("judge_batch() received invalid arguments: items must not be empty")
         args = {"op": "create", "items": items, "questions": questions}

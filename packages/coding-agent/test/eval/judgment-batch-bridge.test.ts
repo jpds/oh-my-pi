@@ -706,7 +706,7 @@ describe("judgeBatch() JS runtime", () => {
 			expect(report.items).toHaveLength(2);
 			expect(report.items.find(([key]) => key === "0")).toEqual(["0", true, { tests: { type: "bool", bool: 1 } }]);
 			expect(report.items.find(([key]) => key === "1")?.[2]).toBe(
-				'images for input "1" must be an array of paths or image attachments',
+				"images for input 1 must be an array of paths or image attachments",
 			);
 			expect(report.unknownImageError).toBe('images contains unknown input key "unknown"');
 			expect(complete).toHaveBeenCalledTimes(1);
@@ -932,10 +932,10 @@ describe("judge_batch() Python prelude", () => {
 				dumped: "[]",
 			});
 			expect(one.image_items).toEqual({
-				"1": [true, { tests: { type: "bool", bool: 1 } }],
+				"'1.0'": [true, { tests: { type: "bool", bool: 1 } }],
 				"'1'": [true, { tests: { type: "bool", bool: 1 } }],
-				"1.25": [true, { tests: { type: "bool", bool: 1 } }],
-				"2.5": [false, 'images for input "2.5" must be an array of paths or image attachments'],
+				"'1.25'": [true, { tests: { type: "bool", bool: 1 } }],
+				"'2.5'": [false, 'images for input "2.5" must be an array of paths or image attachments'],
 			});
 			expect(one.unknown_image_error).toBe('images contains unknown input key "unknown"');
 			const imageReport = result.output.split("\n").find(line => line.startsWith("__IMAGE_BLOCKS__"));

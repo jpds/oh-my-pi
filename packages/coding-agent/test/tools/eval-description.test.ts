@@ -162,7 +162,7 @@ describe("eval tool description", () => {
 		session.getToolByName = name => (name === "eval" ? (evalTool as unknown as AgentTool) : undefined);
 		const readTool = new ReadTool(session);
 		for (const [topic, signature] of [
-			["judge", "judge(state, questions)"],
+			["judge", "judge(state, questions, images"],
 			["helpers", "budget.total"],
 			["helpers", "%load <path>"],
 		]) {
