@@ -7,7 +7,8 @@ import * as path from "node:path";
 import { getAgentDir, logger, normalizePathForComparison, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { getManagedSkillsDir, MANAGED_SKILLS_PROVIDER_ID } from "../autolearn/managed-skills";
-import { registerProvider } from "../capability";
+import { boundSettings, registerProvider } from "../capability";
+import { cfgExtensions } from "../extensibility/settings";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import { type Extension, type ExtensionManifest, extensionCapability } from "../capability/extension";
 import { type ExtensionModule, extensionModuleCapability } from "../capability/extension-module";
@@ -23,6 +24,7 @@ import { type SlashCommand, slashCommandCapability } from "../capability/slash-c
 import { type SystemPrompt, systemPromptCapability } from "../capability/system-prompt";
 import { type CustomTool, toolCapability } from "../capability/tool";
 import type { LoadContext, LoadResult } from "../capability/types";
+import { readConfiguredExtensions } from "./omp-extension-roots";
 import { expandTilde } from "../tools/path-utils";
 import {
 	discoverRuleFromMarkdown,
@@ -510,7 +512,26 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 		_source: createSourceMeta(PROVIDER_ID, extPath, level),
 	});
 
+	// Effective `extensions:` for this load: bound Settings (declarative layer,
+	// YAML, overlays, legacy migrations) > ctx.extensionRoots (scoped
+	// sub-discovery) > persisted .omp config chain. The runtime extension loader
+	// consumes the same value, so this lane tracks it in every mode. A bound
+	// instance that never declared `extensions` (leftover in-memory instances
+	// other loads held) owns nothing here: its empty array must not mask the
+	// chain, hence isConfigured.
+	const resolveConfigured = async (): Promise<{ entries: readonly string[]; level: "user" | "project" } | null> => {
+		const settings = boundSettings();
+		if (settings && cfgExtensions.isConfigured(settings)) {
+			return { entries: cfgExtensions.get(settings), level: settings.extensionsSourceLevel() };
+		}
+		if (ctx.extensionRoots)
+			return { entries: ctx.extensionRoots.configured, level: ctx.extensionRoots.configuredLevel };
+		const persisted = await readConfiguredExtensions(ctx);
+		return persisted ? { entries: persisted.entries, level: persisted.level } : null;
+	};
+
 	const configDirs = await getConfigDirs(ctx);
+	const configured = await resolveConfigured();
 
 	const [discoveredResults, settingsResults] = await Promise.all([
 		Promise.all(configDirs.map(({ dir }) => discoverExtensionModulePaths(ctx, path.join(dir, "extensions")))),
@@ -524,6 +545,10 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 		}
 	}
 
+	// settings.json `extensions` is the legacy spelling of the configured lane
+	// (Settings migrates it into config.yml); the effective value wins, this one
+	// fills gaps. Dedupe keeps one extension from listing twice.
+	const settingsJsonPaths = new Set<string>();
 	const settingsExtensions: Array<{
 		resolvedPath: string;
 		settingsPath: string;
@@ -545,11 +570,22 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 				warnings.push(`Invalid extension path in ${settingsPath}: ${String(entry)}`);
 				continue;
 			}
+			settingsJsonPaths.add(resolveExtensionPath(entry));
 			settingsExtensions.push({
 				resolvedPath: resolveExtensionPath(entry),
 				settingsPath,
 				level,
 			});
+		}
+	}
+
+	if (configured) {
+		for (const entry of configured.entries) {
+			const resolved = resolveExtensionPath(entry);
+			if (settingsJsonPaths.has(resolved)) continue;
+			// settingsPath "config" = came from the effective lanes, not a file this
+			// provider discovered; the runtime loader owns load/warn for it.
+			settingsExtensions.push({ resolvedPath: resolved, settingsPath: "config", level: configured.level });
 		}
 	}
 
@@ -575,7 +611,7 @@ async function loadExtensionModules(ctx: LoadContext): Promise<LoadResult<Extens
 			});
 		} else if (content !== null) {
 			items.push(createExtensionModule(resolvedPath, level));
-		} else {
+		} else if (settingsExtensions[i].settingsPath !== "config") {
 			warnings.push(`Extension path not found: ${resolvedPath}`);
 		}
 	}
