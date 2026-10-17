@@ -167,7 +167,17 @@ export function replayCachedReady<K, M>(
 export async function installSharpStubResolver(runtimeDir: string): Promise<string> {
 	const nodeModules = path.join(runtimeDir, "node_modules");
 	const sharpStub = path.join(runtimeDir, "omp-sharp-stub.cjs");
-	await Bun.write(sharpStub, "module.exports = {};\n");
+	const stubContent = "module.exports = {};\n";
+	// Write only when missing or stale: a runtime dir may be read-only (pre-
+	// provisioned tree, container image layer), and this runs on every worker
+	// load, not just at install time. The registered stub path is unchanged.
+	let existing: string | undefined;
+	try {
+		existing = await Bun.file(sharpStub).text();
+	} catch {
+		existing = undefined;
+	}
+	if (existing !== stubContent) await Bun.write(sharpStub, stubContent);
 	installRuntimeModuleResolver({ runtimeNodeModules: nodeModules, stubs: { sharp: sharpStub } });
 	return nodeModules;
 }

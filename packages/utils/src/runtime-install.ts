@@ -400,6 +400,10 @@ async function withLegacyInstallLock<T>(runtimeDir: string, sleepMs: number, fn:
 }
 
 export async function writeRuntimeManifest(runtimeDir: string, install: RuntimeInstallSpec): Promise<void> {
+	// Lock artifacts are persisted under a prefixed name after install
+	// (runRuntimeInstall), so any plain `bun.lockb` here is a leftover from a
+	// legacy pre-18.x install — not this installer's output — and is omitted
+	// to avoid rendering contradictory pins.
 	await fsp.mkdir(runtimeDir, { recursive: true });
 	const manifest: Record<string, unknown> = {
 		private: true,
@@ -410,6 +414,8 @@ export async function writeRuntimeManifest(runtimeDir: string, install: RuntimeI
 	if (install.trustedDependencies?.length) manifest.trustedDependencies = install.trustedDependencies;
 	await Bun.write(path.join(runtimeDir, "package.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
 }
+
+const RUNTIME_LOCK_ARTIFACTS: readonly ["bun.lock", "bun.lockb"] = ["bun.lock", "bun.lockb"];
 
 async function readPipe(stream: ReadableStream<Uint8Array> | null): Promise<string> {
 	if (!stream) return "";
@@ -429,7 +435,20 @@ async function runRuntimeInstall(runtimeDir: string): Promise<void> {
 		readPipe(proc.stderr as ReadableStream<Uint8Array> | null),
 		proc.exited,
 	]);
-	if (exitCode === 0) return;
+	if (exitCode === 0) {
+		// Persist the resolution this install produced (bun leaves a lockfile in
+		// the manifest directory even when one was absent beforehand). The
+		// snapshot makes a future reinstall of a corrupted tree byte-identical
+		// instead of re-resolving against whatever the registry serves later,
+		// and lets offline provisioning (e.g. Nix precache) validate its
+		// assembled tree against the same closure omp installs.
+		for (const name of RUNTIME_LOCK_ARTIFACTS) {
+			const source = path.join(runtimeDir, name);
+			if (!(await Bun.file(source).exists())) continue;
+			await fsp.copyFile(source, path.join(runtimeDir, `runtime-${name}`));
+		}
+		return;
+	}
 	const output = `${stdout}\n${stderr}`.trim();
 	throw new Error(
 		`Failed to install runtime at ${runtimeDir} with ${process.execPath} install (exit ${exitCode}): ${output}`,
