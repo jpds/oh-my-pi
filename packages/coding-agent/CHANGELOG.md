@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/extensions` listing extensions configured only through the `extensions:` setting in YAML config (including the declarative `PI_CONFIG_DECLARATIVE_FILES` layer): they loaded at startup but the dashboard read only legacy `settings.json`, so they were invisible and untogglable; the native provider now resolves the effective `extensions` value from Settings, session extension roots, or the persisted config chain, and ACP `_omp/extensions` binds its Settings instance first so the declarative layer is visible there too.
+
 ## [18.11.3] - 2026-10-16
 
 ### Breaking Changes

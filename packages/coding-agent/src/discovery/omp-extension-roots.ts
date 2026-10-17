@@ -218,7 +218,7 @@ interface ConfiguredExtensions {
  * then user legacy settings. A present user YAML config suppresses its legacy
  * migration source even when it omits `extensions`.
  */
-async function readConfiguredExtensions(ctx: LoadContext): Promise<ConfiguredExtensions | null> {
+export async function readConfiguredExtensions(ctx: LoadContext): Promise<ConfiguredExtensions | null> {
 	const { project, user } = scopeDirs(ctx);
 	const [projectYaml, projectSettings, userYaml, userSettings] = await Promise.all([
 		readYamlExtensions(project, PROJECT_CONFIG_FILENAMES),

@@ -47,6 +47,7 @@ import {
 import { disableProvider, enableProvider } from "../../capability";
 import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import { initializeWithSettings } from "../../discovery";
 import {
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
@@ -1199,8 +1200,16 @@ export class AcpAgent implements Agent {
 				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
 				const sm = await Settings.init();
 				const disabledIds = cfgDisabledExtensions.get(sm);
-				const extensions = await loadAllExtensions(cwd, disabledIds);
-				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
+				// Bound so the native extension-module provider resolves configured
+				// entries from effective settings (incl. the declarative layer);
+				// scopeless disk reads cannot see that layer.
+				const release = initializeWithSettings(sm);
+				try {
+					const extensions = await loadAllExtensions(cwd, disabledIds);
+					return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
+				} finally {
+					release();
+				}
 			}
 			case "_omp/extensions/toggle": {
 				const providerId = params.providerId;
