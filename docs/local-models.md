@@ -239,3 +239,21 @@ In Tern, click the microphone beside Send, speak when **Recording · Stop** appe
 - Session-title generation uses `modelRoles.tiny`; Mnemopi extraction and consolidation use `modelRoles.memory` when its LLM mode is enabled. Their distinct prompts and benchmark groups do not impose separate runtime model types.
 - Auto-thinking, Smart unexpected-stop detection, typed Eval judgments, and AI-assisted git staging use the `judge` role. Assign `typesafe/jev-1.14.0` for TypeSafe or a compatible local tiny model for on-device judgment; order alternatives under `retry.fallbackChains.judge`.
 - Managed memory extraction uses the shared line-format, small-talk-guarded system prompt on both local and online transports. A local primary additionally selects the local consolidation prompt. Explicit external Mnemopi endpoints remain authoritative instead of being replaced by the memory role.
+
+## Pre-seeding the tiny-model cache (shared machines, Nix store)
+
+The local-model weights live in a plain repo-keyed directory tree, so they can be provisioned outside omp and pointed at with `PI_TINY_MODELS_CACHE` instead of downloading per machine:
+
+```
+$PI_TINY_MODELS_CACHE/
+  LiquidAI/LFM2.5-230M-ONNX/          # `omp tiny-models download lfm2.5-230m` on one seed machine
+    config.json  generation_config.json  tokenizer.json  tokenizer_config.json
+    onnx/model_q4.onnx  onnx/model_q4.onnx_data      # ~207 MB for the default title model
+```
+
+Layout notes:
+
+- Model weights are laid out as `<cache>/<org>/<repo>/…` (the local ONNX text models and sherpa STT use `org/name`; predict and MLX use `org--name`). Only that one directory moves — `PI_TINY_MODELS_CACHE` overrides `getTinyModelsCacheDir()` directly.
+- The side-installed runtimes (`tiny-title-runtime/transformers-<ver>`, `stt-runtime/…`, `tts-runtime/…`, `tiny-mlx-runtime/…`) live **under the cache**, in `<cache>/runtimes/`, so pointing `PI_TINY_MODELS_CACHE` at a writable persistent directory relocates both the weights and the runtimes together. The only real requirement is that the cache directory itself is writable (installs and lock/marker files write into it). Do **not** point it at the read-only Nix store path itself — instead, keep the env override on a writable dir and symlink (or copy) the weights in: `ln -s /nix/store/…-lfm2.5-230m ~/.omp/agent/cache/tiny-models/LiquidAI/LFM2.5-230M-ONNX`.
+- Weights are read-only safe once complete (the downloader skips complete files); only the runtime install and lock/marker files need write access.
+- Alternatively, keep the default paths and symlink only specific models into `~/.omp/agent/cache/tiny-models/` — resolution is a plain directory read, so per-model symlinks work per host without any env var.
