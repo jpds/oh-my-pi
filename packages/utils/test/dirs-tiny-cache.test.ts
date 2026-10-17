@@ -1,14 +1,18 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getTinyModelsCacheDir } from "@oh-my-pi/pi-utils/dirs";
+import { getTinyModelsCacheDir, getTinyModelsRuntimesDir } from "@oh-my-pi/pi-utils/dirs";
 
 const ENV_KEY = "PI_TINY_MODELS_CACHE";
+const RUNTIMES_KEY = "PI_TINY_MODELS_RUNTIMES";
 const originalValue = process.env[ENV_KEY];
+const originalRuntimesValue = process.env[RUNTIMES_KEY];
 
 afterEach(() => {
 	if (originalValue === undefined) delete process.env[ENV_KEY];
 	else process.env[ENV_KEY] = originalValue;
+	if (originalRuntimesValue === undefined) delete process.env[RUNTIMES_KEY];
+	else process.env[RUNTIMES_KEY] = originalRuntimesValue;
 });
 
 describe("tiny models cache dir override", () => {
@@ -38,5 +42,30 @@ describe("tiny models cache dir override", () => {
 
 		process.env[ENV_KEY] = "./relative/tiny-models";
 		expect(getTinyModelsCacheDir()).not.toContain("relative"); // falls back to agent subdir
+	});
+});
+
+describe("tiny models runtimes dir override", () => {
+	it("defaults under the cache dir so the cache override relocates runtimes", () => {
+		delete process.env[RUNTIMES_KEY];
+		process.env[ENV_KEY] = "/var/lib/omp/tiny-models";
+		expect(getTinyModelsRuntimesDir()).toBe("/var/lib/omp/tiny-models/runtimes");
+	});
+
+	it("prefers PI_TINY_MODELS_RUNTIMES over the cache-derived root, independent of the cache override", () => {
+		const runtimesDir = path.join(os.tmpdir(), "writable", "omp-runtimes");
+		process.env[RUNTIMES_KEY] = runtimesDir;
+		process.env[ENV_KEY] = path.join(os.tmpdir(), "nix-store", "tiny-models");
+		expect(getTinyModelsRuntimesDir()).toBe(runtimesDir);
+		expect(getTinyModelsRuntimesDir(path.join(os.tmpdir(), "some-other-agent"))).toBe(runtimesDir);
+	});
+
+	it("~-expands the override and rejects relative values", () => {
+		delete process.env[ENV_KEY];
+		process.env[RUNTIMES_KEY] = "~/omp/runtimes";
+		expect(getTinyModelsRuntimesDir()).toBe(path.join(os.homedir(), "omp/runtimes"));
+
+		process.env[RUNTIMES_KEY] = "relative/runtimes";
+		expect(getTinyModelsRuntimesDir()).not.toContain("relative"); // falls back to cache subdir
 	});
 });

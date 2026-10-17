@@ -946,9 +946,11 @@ export function getTinyModelsCacheDir(agentDir?: string): string {
 	);
 }
 
-/** Get the side-runtime root for the tiny models (transformers JS runtime, STT, TTS, MLX venv). Lives *under* the cache dir so `PI_TINY_MODELS_CACHE` relocates the runtimes along with the weights. */
+/** Get the side-runtime root for the tiny models (transformers JS runtime, STT, TTS, MLX venv). Defaults to *under* the cache dir so `PI_TINY_MODELS_CACHE` relocates the runtimes along with the weights; `PI_TINY_MODELS_RUNTIMES` overrides the root itself (e.g. when the cache is a read-only Nix store path and the runtimes must land in a writable directory). */
 export function getTinyModelsRuntimesDir(agentDir?: string): string {
-	return path.join(getTinyModelsCacheDir(agentDir), "runtimes");
+	return (
+		resolveAbsoluteDir(process.env.PI_TINY_MODELS_RUNTIMES) ?? path.join(getTinyModelsCacheDir(agentDir), "runtimes")
+	);
 }
 
 /** Get the document conversion cache directory (~/.omp/agent/cache/document-conversions; XDG default: $XDG_CACHE_HOME/omp/cache/document-conversions). */
