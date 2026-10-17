@@ -10,6 +10,7 @@ import type {
 import {
 	ensureRuntimeInstalled,
 	getTinyModelsCacheDir,
+	getTinyModelsRuntimesDir,
 	isCompiledBinary,
 	resolveRuntimeModule,
 } from "@oh-my-pi/pi-utils";
@@ -137,12 +138,12 @@ function getSherpaVersionSpec(): string {
 
 function getSttRuntimeDir(): string {
 	const key = getTransformersVersionSpec().replace(/[^A-Za-z0-9._-]/g, "_");
-	return path.join(path.dirname(getTinyModelsCacheDir()), "stt-runtime", `transformers-${key}`);
+	return path.join(getTinyModelsRuntimesDir(), "stt-runtime", `transformers-${key}`);
 }
 
 function getSherpaRuntimeDir(): string {
 	const key = getSherpaVersionSpec().replace(/[^A-Za-z0-9._-]/g, "_");
-	return path.join(path.dirname(getTinyModelsCacheDir()), "stt-runtime", `sherpa-${key}`);
+	return path.join(getTinyModelsRuntimesDir(), "stt-runtime", `sherpa-${key}`);
 }
 
 /**

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Local-model side runtimes (`tiny-title-runtime`, `stt-runtime`, `tts-runtime`, `tiny-mlx-runtime`) now install under `<tiny-models-cache>/runtimes/` instead of the cache's parent directory, so `PI_TINY_MODELS_CACHE` pointing at a persistent writable directory (e.g. a Nix/container deployment) keeps runtimes across reboots; first use after this change re-installs once into the new path.
+
 ### Fixed
 
 - Fixed `/extensions` listing extensions configured only through the `extensions:` setting in YAML config (including the declarative `PI_CONFIG_DECLARATIVE_FILES` layer): they loaded at startup but the dashboard read only legacy `settings.json`, so they were invisible and untogglable; the native provider now resolves the effective `extensions` value from Settings, session extension roots, or the persisted config chain, and ACP `_omp/extensions` binds its Settings instance first so the declarative layer is visible there too.
