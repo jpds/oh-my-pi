@@ -1,7 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
-import { $which, getTinyModelsCacheDir, isEnoent, type RuntimeInstallPhase, withFileLock } from "@oh-my-pi/pi-utils";
+import {
+	$which,
+	getTinyModelsCacheDir,
+	getTinyModelsRuntimesDir,
+	isEnoent,
+	type RuntimeInstallPhase,
+	withFileLock,
+} from "@oh-my-pi/pi-utils";
 
 /**
  * Side-installed Python runtime for the MLX tiny-model backend: a private venv
@@ -18,7 +25,7 @@ const READY_MARKER = ".omp-mlx-lm";
 
 /** Directory of the `mlx-lm` venv for {@link MLX_LM_VERSION}. */
 export function getTinyMlxRuntimeDir(): string {
-	return path.join(path.dirname(getTinyModelsCacheDir()), "tiny-mlx-runtime", `mlx-lm-${MLX_LM_VERSION}`);
+	return path.join(getTinyModelsRuntimesDir(), "tiny-mlx-runtime", `mlx-lm-${MLX_LM_VERSION}`);
 }
 
 /** Local weights directory for an MLX Hub repo (`org/name` → `mlx/org--name`). */

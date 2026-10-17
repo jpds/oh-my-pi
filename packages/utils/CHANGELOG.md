@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Side-installed tiny-model runtimes (`tiny-title-runtime`, `stt-runtime`, `tts-runtime`, `tiny-mlx-runtime`) now live under `<tiny-models-cache>/runtimes/` (new `getTinyModelsRuntimesDir()`) instead of the cache's parent directory, so `PI_TINY_MODELS_CACHE` relocates the runtimes along with the weights; existing installs re-materialize into the new path on first use.
+
 ## [18.11.3] - 2026-10-16
 
 ### Fixed

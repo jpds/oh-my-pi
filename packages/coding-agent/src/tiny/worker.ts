@@ -13,7 +13,7 @@ import type {
 	TextGenerationStringOutput,
 	StoppingCriteria as TransformersStoppingCriteria,
 } from "@huggingface/transformers";
-import { getTinyModelsCacheDir, logger, setProcessName } from "@oh-my-pi/pi-utils";
+import { getTinyModelsRuntimesDir, logger, setProcessName } from "@oh-my-pi/pi-utils";
 import {
 	errorMessage,
 	errorText,
@@ -79,7 +79,7 @@ interface ReplyTransport {
 
 function getTinyTitleRuntimeDir(): string {
 	return path.join(
-		path.dirname(getTinyModelsCacheDir()),
+		getTinyModelsRuntimesDir(),
 		"tiny-title-runtime",
 		`transformers-${getTransformersVersionSpec().replace(/[^A-Za-z0-9._-]/g, "_")}`,
 	);

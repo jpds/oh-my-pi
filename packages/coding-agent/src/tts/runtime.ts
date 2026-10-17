@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
+import { getTinyModelsRuntimesDir } from "@oh-my-pi/pi-utils";
 
 export const KOKORO_PACKAGE = "kokoro-js";
 export const KOKORO_VERSION = "1.2.1";
@@ -8,7 +8,7 @@ export const ONNXRUNTIME_NODE_VERSION = "1.26.0";
 
 export function getTtsRuntimeDir(): string {
 	const runtimeKey = KOKORO_VERSION.replace(/[^A-Za-z0-9._-]/g, "_");
-	return path.join(path.dirname(getTinyModelsCacheDir()), "tts-runtime", `kokoro-${runtimeKey}`);
+	return path.join(getTinyModelsRuntimesDir(), "tts-runtime", `kokoro-${runtimeKey}`);
 }
 
 export async function isTtsRuntimeCached(): Promise<boolean> {
