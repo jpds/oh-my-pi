@@ -15,12 +15,14 @@ const ST = "\x1b\\";
 const BEL = "\x07";
 
 /**
- * The terminal's detected OSC 8 capability, captured once at import before any
- * policy application mutates {@link TERMINAL}.hyperlinks. `auto` resolves against
- * this immutable value so a prior `always`/`off` selection can never poison
- * detection when the user switches back to `auto`.
+ * The terminal's detected OSC 8 capability, captured on the first `auto` read so
+ * it stays an immutable snapshot: after capture, any policy application mutates
+ * only the live {@link TERMINAL}.hyperlinks flag, never this value. Captured
+ * lazily instead of at import because `terminal-capabilities` → `theme/theme`
+ * → … → `render/hyperlink` forms an import cycle; importing eagerly would read
+ * `TERMINAL` mid-initialization (TDZ).
  */
-const DETECTED_TERMINAL_HYPERLINKS = TERMINAL.hyperlinks;
+let detectedTerminalHyperlinks: boolean | undefined;
 type HyperlinkMode = "off" | "auto" | "always";
 let hyperlinkMode: HyperlinkMode = "auto";
 
@@ -94,7 +96,7 @@ function resolveHyperlinkMode(mode: HyperlinkMode): boolean {
 	// runtime flag that applyHyperlinkSetting overwrites) and NO_COLOR.
 	if (Bun.env.NO_COLOR) return false;
 	if (!process.stdout.isTTY) return false;
-	return DETECTED_TERMINAL_HYPERLINKS;
+	return (detectedTerminalHyperlinks ??= TERMINAL.hyperlinks);
 }
 
 /**
@@ -102,7 +104,7 @@ function resolveHyperlinkMode(mode: HyperlinkMode): boolean {
  * effective flag that pi-tui renderers gating on it directly — the Markdown
  * component's `[text](url)`/bare-URL links and the status-line PR link — consult.
  *
- * Detection stays immutable in {@link DETECTED_TERMINAL_HYPERLINKS}, so this only
+ * Detection stays immutable in `detectedTerminalHyperlinks`, so this only
  * ever writes the effective decision; `auto` transitions restore real detection
  * via {@link isHyperlinkEnabled}. Called at TUI startup and whenever the setting
  * changes at runtime.

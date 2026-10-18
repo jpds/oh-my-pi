@@ -8,38 +8,10 @@ if "__omp_prelude_loaded__" not in globals():
     from urllib.parse import unquote
 
 
-    # __omp_display is injected by runner.py before the prelude executes; it
-    # mirrors IPython's display() semantics with the same MIME bundle output.
-    _omp_display = __omp_display  # type: ignore[name-defined]
-
-    _PRESENTABLE_REPRS = (
-        "_repr_mimebundle_",
-        "_repr_html_",
-        "_repr_json_",
-        "_repr_markdown_",
-        "_repr_png_",
-        "_repr_jpeg_",
-        "_repr_svg_",
-        "_repr_latex_",
-    )
-
-    def display(value):
-        """Render a value. Falls back to a JSON+text/plain bundle for plain dict/list/tuple."""
-        if any(hasattr(value, attr) for attr in _PRESENTABLE_REPRS):
-            _omp_display(value)
-            return
-        if isinstance(value, (dict, list, tuple)):
-            try:
-                bundle = {"application/json": value, "text/plain": repr(value)}
-                _omp_display(bundle, raw=True)
-                return
-            except Exception:
-                pass
-        _omp_display(value)
-
-    def _emit_status(op: str, **data):
-        """Emit structured status event for TUI rendering."""
-        _omp_display({"application/x-omp-status": {"op": op, **data}}, raw=True)
+    # __omp_emit_status is injected by runner.py before the prelude executes;
+    # it writes `status` frames for the current cell.
+    _emit_status = __omp_emit_status  # type: ignore[name-defined]
+    _emit_image = __omp_emit_image  # type: ignore[name-defined]
 
     def env(key: str | None = None, value: str | None = None):
         """Get/set environment variables."""
@@ -538,7 +510,7 @@ if "__omp_prelude_loaded__" not in globals():
         images = value.get("images")
         if not isinstance(images, list) or not images:
             return value
-        displayed = 0
+        shown = 0
         for image in images:
             if not isinstance(image, dict):
                 continue
@@ -546,13 +518,13 @@ if "__omp_prelude_loaded__" not in globals():
             mime_type = image.get("mimeType")
             if not isinstance(data, str) or not isinstance(mime_type, str):
                 continue
-            _omp_display({mime_type: data}, raw=True)
-            displayed += 1
-        if displayed == 0:
+            if _emit_image({"data": data, "mimeType": mime_type}):
+                shown += 1
+        if shown == 0:
             return value
         surfaced = {key: item for key, item in value.items() if key != "images"}
-        suffix = "" if displayed == 1 else "s"
-        surfaced["images"] = f"({displayed} image{suffix} displayed)"
+        suffix = "" if shown == 1 else "s"
+        surfaced["images"] = f"({shown} image{suffix} displayed)"
         return surfaced
 
     async def _omp_prelude(name: str, parameters):

@@ -22,13 +22,7 @@ import * as AIError from "../error";
 import { embeddedImageDataUrl } from "../images/shared";
 import type { ImageContent } from "../types";
 import { type JsonValue, type JudgmentRequest, type Questions, tokenUsage } from "./types";
-import {
-	type DecodedJudgment,
-	finiteNumber,
-	JEV_IMAGE_INPUT,
-	type JudgmentImageAssets,
-	type JudgmentWire,
-} from "./wire";
+import { type DecodedJudgment, finiteNumber, type JudgmentImageAssets, type JudgmentWire } from "./wire";
 
 /**
  * Canonical route of each System One dialect, appended to the base URL when a
@@ -205,10 +199,11 @@ function encodeSystemOneImage(image: ImageContent): SystemOneImageAsset {
 /** TypeSafe's own route, shared by every System One server. */
 export const typesafeWire: JudgmentWire = {
 	...systemOneWire("/v1/systemone"),
-	images: JEV_IMAGE_INPUT,
+	images: { mimeTypes: ["image/png", "image/jpeg"] },
 	supportsImageAssets: true,
 	imagesRequireOptIn: true,
 	imageHeaders: { "TypeSafe-Danger-Zone-Images": "true" },
+	ignoresImageDetail: true,
 	encode(request, model, imageAssets) {
 		const suppliedAssets = Object.entries(imageAssets ?? {});
 		const images = request.images ?? [];
@@ -239,7 +234,7 @@ export const typesafeWire: JudgmentWire = {
 /** OpenRouter Decisions: System One body under `/api/alpha`, with image parts preserved in state. */
 export const openrouterDecisionsWire: JudgmentWire = {
 	...systemOneWire("/decisions"),
-	images: JEV_IMAGE_INPUT,
+	images: {},
 	imagesRequireOptIn: true,
 	encode(request, model) {
 		const imageParts: JsonValue[] = (request.images ?? []).map(image => ({
