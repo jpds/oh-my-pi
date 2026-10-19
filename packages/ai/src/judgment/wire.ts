@@ -7,7 +7,7 @@ import type { JudgmentConfig } from "@oh-my-pi/pi-catalog/types";
 import * as AIError from "../error";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ImageContent, Usage } from "../types";
-import { resolveJudgmentImageInput, type JudgmentImageInput } from "@oh-my-pi/pi-catalog/compat/judgment-images";
+import { type JudgmentImageInput } from "@oh-my-pi/pi-catalog/compat/judgment-images";
 import { type JudgmentRequest, type Questions, type WireQuestions, tokenUsage } from "./types";
 
 /** Where one attempt posts and which bearer token it sends. */
@@ -38,7 +38,11 @@ export interface JudgmentWire {
 	 */
 	target(baseUrl: string, model: string, key: string): JudgmentTarget;
 	/** Request body for `model`, with optional asset context for dialects that preserve references. */
-	encode(request: JudgmentRequest<Questions | WireQuestions>, model: string, imageAssets?: JudgmentImageAssets): unknown;
+	encode(
+		request: JudgmentRequest<Questions | WireQuestions>,
+		model: string,
+		imageAssets?: JudgmentImageAssets,
+	): unknown;
 	/** Headers this dialect adds to requests that carry images. */
 	imageHeaders?: Readonly<Record<string, string>>;
 	/** Image input this dialect accepts; absent means text-only. */
@@ -49,6 +53,8 @@ export interface JudgmentWire {
 	imagesRequireOptIn?: boolean;
 	/** Whether this wire drops per-image detail metadata. */
 	ignoresImageDetail?: boolean;
+	/** Whether this dialect forwards `box` questions; others reject them before sending. */
+	boxes?: boolean;
 	/**
 	 * The response's answers and usage for the `questions` asked; `undefined`
 	 * when the payload is not this API's response shape. A dialect whose answer
@@ -73,7 +79,7 @@ const RESERVED_TYPE_FIELDS = new Set([
 ]);
 const CANONICAL_ANSWER_KEYS = new Set(["choice", "noul", "score"]);
 
-function isCanonicalAnswerKey(key: string): key is "choice" | "noul" | "score" {
+export function isCanonicalAnswerKey(key: string): key is "choice" | "noul" | "score" {
 	return CANONICAL_ANSWER_KEYS.has(key);
 }
 
@@ -146,7 +152,9 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 				const question = request.questions[id];
 				const wireQuestion: Record<string, unknown> = {
 					...question,
-					[typeField]: typeMap?.[question.type] ?? question.type,
+					[typeField]: isCanonicalAnswerKey(question.type)
+						? (typeMap?.[question.type] ?? question.type)
+						: question.type,
 				};
 				if (typeField !== "type") delete wireQuestion.type;
 				wireQuestions[id] = wireQuestion;
@@ -186,7 +194,7 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 					answers[id] = raw;
 					continue;
 				}
-				const expectedWire = typeMap?.[canonical] ?? canonical;
+				const expectedWire = isCanonicalAnswerKey(canonical) ? (typeMap?.[canonical] ?? canonical) : canonical;
 				const wireType: unknown = raw[typeField];
 
 				if (wireType !== expectedWire) {
@@ -199,7 +207,7 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 					delete normalized[typeField];
 				}
 				if (valueMap !== undefined) {
-					const wireKey = valueMap[canonical];
+					const wireKey = isCanonicalAnswerKey(canonical) ? valueMap[canonical] : undefined;
 					if (wireKey !== undefined && wireKey !== canonical && normalized[wireKey] !== undefined) {
 						normalized[canonical] ??= normalized[wireKey];
 						delete normalized[wireKey];
