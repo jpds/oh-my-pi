@@ -2572,6 +2572,17 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			contextPercent = collabState.contextUsage.percent ?? contextPercent;
 		}
 
+		const settings = this.#resolveSettings();
+		let gaugeScale = 1;
+		let gaugeWindow = contextWindow;
+		if (settings.scaleGaugeToCompaction === true && contextWindow > 0) {
+			const boundaries = this.#compactionBoundaries(contextWindow);
+			if (boundaries) {
+				gaugeWindow = (boundaries.thresholdPercent / 100) * contextWindow;
+				gaugeScale = contextWindow / gaugeWindow;
+			}
+		}
+
 		const shouldResolveActiveRepo = this.#gitEnabled() && (includePath || includeGit || includePr);
 		const projectDir = getProjectDir();
 		const activeRepoCache = shouldResolveActiveRepo
@@ -2591,7 +2602,6 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const gitPr = includePr ? this.#lookupPr(activeRepoCache) : null;
 		const compactionSpeculation = this.session.compactionSpeculation ?? "idle";
 		this.#syncSpeculationBlink(compactionSpeculation);
-		const settings = this.#resolveSettings();
 		const sessionAccentEnabled = settings.sessionAccent !== false;
 		const brandVisible = settings.leftSegments.includes("pi") || settings.rightSegments.includes("pi");
 		const turnElapsedMs = this.getTurnElapsedMs();
@@ -2622,6 +2632,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			contextPercent,
 			contextTokens,
 			contextWindow,
+			gaugeScale,
+			gaugeWindow,
 			autoCompactEnabled: this.#autoCompactEnabled,
 			compactionSpeculation,
 			speculationBlinkOn: this.#speculationBlinkOn,
@@ -3113,7 +3125,10 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		// this budget a long path/session title can leave a one-cell gap: the
 		// context segment is gone, and the gauge silently omits its labels too.
 		const embeddedContextWidth = embedContext
-			? embeddedContextGaugeMinWidth(ctx.contextPercent, ctx.contextWindow)
+			? embeddedContextGaugeMinWidth(
+					ctx.contextPercent === null ? null : ctx.contextPercent * ctx.gaugeScale,
+					ctx.gaugeWindow,
+				)
 			: 0;
 		const minimumGapWidth = (): number => {
 			if (!embeddedContextWidth) return left.length > 0 && right.length > 0 ? 1 : 0;
@@ -3276,13 +3291,16 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const horizontal = theme.boxRound.horizontal;
 		const mode = effectiveSettings.contextLine ?? "embedded";
 		const pct = ctx.contextPercent;
+		// Percent measures toward the compaction cutoff; the raw pct feeds level colors.
+		const scale = ctx.gaugeScale;
+		const displayPct = pct === null ? null : pct * scale;
 		if (mode === "off" || (pct === null && ctx.contextWindow <= 0)) {
 			return `\x1b[49m${usedColor}${horizontal.repeat(gapWidth)}\x1b[39m`;
 		}
 
 		// Unknown usage against a known window (startup prepaint) draws the fresh-session
 		// gauge: one lit cell and the window label, no percent.
-		const clampedPct = pct === null ? 0 : Math.min(100, Math.max(0, pct));
+		const clampedPct = displayPct === null ? 0 : Math.min(100, Math.max(0, displayPct));
 		let percentLabel = "";
 		let windowLabel = "";
 		let percentStart = -1;
@@ -3291,11 +3309,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		// >100%: usage anchored past the active window (e.g. model switch to a
 		// smaller window). The bar clamps full, but the embedded label breaks
 		// past the window label — `──200K─120%` with the percent in error color.
-		const percentOverflow = pct !== null && pct > 100;
+		const percentOverflow = displayPct !== null && displayPct > 100;
 		if (embedContext) {
-			const candidatePercent = pct === null ? "" : formatEmbeddedContextPercent(percentOverflow ? pct : clampedPct);
-			const candidateWindow = formatNumber(ctx.contextWindow);
-			if (gapWidth >= embeddedContextGaugeMinWidth(pct, ctx.contextWindow)) {
+			const candidatePercent =
+				displayPct === null ? "" : formatEmbeddedContextPercent(percentOverflow ? displayPct : clampedPct);
+			const candidateWindow = formatNumber(ctx.gaugeWindow);
+			if (gapWidth >= embeddedContextGaugeMinWidth(displayPct, ctx.gaugeWindow)) {
 				percentLabel = candidatePercent;
 				windowLabel = candidateWindow;
 				if (percentOverflow) {
@@ -3322,10 +3341,10 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			if (boundaries) {
 				const cellFor = (percent: number) =>
 					Math.min(scaleWidth - 1, Math.max(0, Math.round((percent / 100) * scaleWidth)));
-				thresholdIdx = cellFor(boundaries.thresholdPercent);
+				thresholdIdx = cellFor(boundaries.thresholdPercent * scale);
 				// null = no background speculation will run (async disabled or the
 				// first available method is local/instant) — no tick to show.
-				if (boundaries.speculationPercent !== null) speculationIdx = cellFor(boundaries.speculationPercent);
+				if (boundaries.speculationPercent !== null) speculationIdx = cellFor(boundaries.speculationPercent * scale);
 				if (speculationIdx === thresholdIdx) speculationIdx = -1; // threshold wins the cell
 			}
 		}
@@ -3701,20 +3720,25 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 
 		const pct = ctx.contextPercent;
 		const window = ctx.contextWindow;
+		// Same scale as the ANSI gauge.
+		const scale = ctx.gaugeScale;
+		const displayPct = pct === null ? null : pct * scale;
 		const boundaries = ctx.autoCompactEnabled ? this.#compactionBoundaries(window) : null;
 		const lines = [
-			pct === null ? "Context usage unknown" : `Context ${Math.round(pct)}% used`,
-			window > 0 ? `${formatNumber(ctx.contextTokens)} of ${formatNumber(window)} tokens` : "No context window",
+			pct === null ? "Context usage unknown" : `Context ${Math.round(displayPct!)}% used`,
+			window > 0
+				? `${formatNumber(ctx.contextTokens)} of ${formatNumber(ctx.gaugeWindow)} tokens`
+				: "No context window",
 		];
-		if (boundaries) lines.push(`Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`);
+		if (boundaries) lines.push(`Auto-compact at ${Math.round(boundaries.thresholdPercent * scale)}%`);
 		const speculation = ctx.compactionSpeculation;
 		if (speculation === "running") lines.push("Compaction summary in progress");
 		else if (speculation === "armed") lines.push("Compaction summary ready");
 		// The line spans the whole window: omp's boundary symbols sit where speculation
 		// starts and compaction fires, and the share past the speculation point is accent.
-		const used = pct === null ? null : Math.min(1, pct / 100);
+		const used = displayPct === null ? null : Math.min(1, displayPct / 100);
 		const speculationAt =
-			boundaries?.speculationPercent == null ? null : Math.min(1, boundaries.speculationPercent / 100);
+			boundaries?.speculationPercent == null ? null : Math.min(1, (boundaries.speculationPercent * scale) / 100);
 		const marks: TspMeterMark[] = [];
 		if (boundaries) {
 			if (speculationAt !== null) {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `tui.scaleGaugeToCompaction` support to the context gauge: with the setting on, the gauge's percentage, bar fill and window label measure toward the auto-compaction cutoff instead of the full model window, so the bar reaches 100% where compaction fires; level colors keep their raw-window thresholds. Segment contexts carry the scale as `gaugeScale`/`gaugeWindow`.
+
 ## [18.12.4] - 2026-10-20
 
 ### Added

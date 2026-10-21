@@ -842,9 +842,9 @@ const contextPctSegment: StatusLineSegment = {
 	id: "context_pct",
 	render(ctx) {
 		const pct = ctx.contextPercent;
-		const window = ctx.contextWindow;
+		const window = ctx.gaugeWindow;
 
-		const color = getContextUsageThemeColor(getContextUsageLevel(pct ?? 0, window));
+		const color = getContextUsageThemeColor(getContextUsageLevel(pct ?? 0, ctx.contextWindow));
 		// Async-compaction indicator: pulse the auto icon while a background
 		// speculation runs, hold it in accent once a result is armed.
 		let autoIcon = "";
@@ -862,9 +862,12 @@ const contextPctSegment: StatusLineSegment = {
 			}`;
 		}
 		// A known window with unknown usage (startup prepaint) shows the window alone.
+		const displayPct = pct === null ? null : pct * ctx.gaugeScale;
 		const text = theme.fg(
 			color,
-			pct === null && window > 0 ? formatNumber(window) : formatContextUsage(pct, window, ctx.contextTokens),
+			displayPct === null && window > 0
+				? formatNumber(window)
+				: formatContextUsage(displayPct, window, ctx.contextTokens),
 		);
 		const content = withIcon(theme.icon.context, `${text}${autoIcon}`);
 
@@ -872,12 +875,15 @@ const contextPctSegment: StatusLineSegment = {
 	},
 	describe(ctx) {
 		const pct = ctx.contextPercent;
-		const window = ctx.contextWindow;
-		const level = getContextUsageLevel(pct ?? 0, window);
+		const window = ctx.gaugeWindow;
+		const level = getContextUsageLevel(pct ?? 0, ctx.contextWindow);
 		const color = getContextUsageThemeColor(level);
+		const displayPct = pct === null ? null : pct * ctx.gaugeScale;
 		const spans: TspSpan[] = [
 			span(
-				pct === null && window > 0 ? formatNumber(window) : formatContextUsage(pct, window, ctx.contextTokens),
+				displayPct === null && window > 0
+					? formatNumber(window)
+					: formatContextUsage(displayPct, window, ctx.contextTokens),
 				color,
 			),
 		];

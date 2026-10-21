@@ -49,6 +49,8 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 		contextPercent: 0,
 		contextTokens: 0,
 		contextWindow: 0,
+		gaugeScale: 1,
+		gaugeWindow: 0,
 		autoCompactEnabled: false,
 		compactionSpeculation: "idle",
 		speculationBlinkOn: true,

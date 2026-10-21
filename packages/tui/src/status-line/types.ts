@@ -61,6 +61,8 @@ export interface StatusLineSettings {
 	 *  usage. `embedded` moves configured context segments into the annotated
 	 *  gauge as percentage and window labels. Box composer only. */
 	contextLine?: ContextLineMode;
+	/** Measure the gauge toward the auto-compaction cutoff instead of the full context window. */
+	scaleGaugeToCompaction?: boolean;
 }
 
 export type EffectiveStatusLineSettings = Required<
@@ -147,6 +149,14 @@ export interface SegmentContext {
 	contextPercent: number | null;
 	contextTokens: number;
 	contextWindow: number;
+	/**
+	 * Percent multiplier the gauge applies under `tui.scaleGaugeToCompaction`,
+	 * context window ÷ compaction cutoff; `1` when off, compaction disabled, or
+	 * the cutoff is unknown. Percent labels scale by it; level thresholds stay raw.
+	 */
+	gaugeScale: number;
+	/** Window the gauge measures toward: the compaction cutoff when scaled, else `contextWindow`. */
+	gaugeWindow: number;
 	autoCompactEnabled: boolean;
 	/** Background speculative-compaction state (async compaction). */
 	compactionSpeculation: "idle" | "running" | "armed";
