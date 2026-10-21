@@ -68,6 +68,8 @@ export interface ContextUsageOptions {
 	sourceRevision?: number;
 	skillful?: boolean;
 	snapcompact?: ContextSavingsEstimate;
+	/** Mirror of `tui.scaleGaugeToCompaction`: measure the headline against the auto-compaction cutoff. */
+	scaleToCompaction?: boolean;
 }
 
 const GRID_COLS = 20;
@@ -99,6 +101,12 @@ export interface ContextBreakdown {
 	freeTokens: number;
 	/** Where auto-compaction fires, in tokens; undefined when compaction is off. */
 	thresholdTokens?: number;
+	/**
+	 * True when `tui.scaleGaugeToCompaction` is on and a cutoff is known:
+	 * the headline reads current/cutoff/total with a cutoff-side percent, and
+	 * the reserved buffer cells gray out as unusable space.
+	 */
+	scaledToCutoff?: boolean;
 	/** Estimated snapcompact wire savings; set when requested and a snapcompact.* setting is enabled. */
 	snapcompact?: ContextSavingsEstimate;
 }
@@ -116,6 +124,20 @@ export interface CompactionBoundaries {
 }
 
 /**
+ * Where auto-compaction fires, in tokens, or `undefined` when compaction is
+ * disabled/off, the window is unknown, or the resolved cutoff would not sit
+ * inside the window. The breakdown, the boundary percents, and the
+ * session-level boundary resolution all gate on this same predicate.
+ */
+export function resolveCutoffTokens(compactionSettings: CompactionSettings, contextWindow: number): number | undefined {
+	if (!(contextWindow > 0) || !compactionSettings.enabled || compactionSettings.strategy === "off") {
+		return undefined;
+	}
+	const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
+	return thresholdTokens > 0 && thresholdTokens <= contextWindow ? thresholdTokens : undefined;
+}
+
+/**
  * Boundary positions for the status line's annotated context gauge. `null`
  * when compaction is disabled/off or the window is unknown — the gauge then
  * renders without markers. The host supplies a lead only when its configured
@@ -126,10 +148,8 @@ export function computeCompactionBoundaries(
 	contextWindow: number,
 	speculationLeadTokens?: number,
 ): CompactionBoundaries | null {
-	if (!(contextWindow > 0)) return null;
-	if (!compactionSettings.enabled || compactionSettings.strategy === "off") return null;
-	const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
-	if (!(thresholdTokens > 0) || thresholdTokens > contextWindow) return null;
+	const thresholdTokens = resolveCutoffTokens(compactionSettings, contextWindow);
+	if (thresholdTokens === undefined) return null;
 	return {
 		thresholdPercent: (thresholdTokens / contextWindow) * 100,
 		speculationPercent:
@@ -475,13 +495,8 @@ export function computeContextBreakdown(session: ContextUsageSession, options: C
 	let thresholdTokens: number | undefined;
 	if (contextWindow > 0) {
 		const compactionSettings = options.compaction;
-		if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
-			const threshold = resolveThresholdTokens(contextWindow, compactionSettings);
-			if (threshold > 0 && threshold <= contextWindow) thresholdTokens = threshold;
-			autoCompactBufferTokens = Math.max(0, contextWindow - threshold);
-		} else {
-			autoCompactBufferTokens = 0;
-		}
+		thresholdTokens = resolveCutoffTokens(compactionSettings, contextWindow);
+		autoCompactBufferTokens = thresholdTokens !== undefined ? Math.max(0, contextWindow - thresholdTokens) : 0;
 		// Even when fully disabled, fall back to a sensible reserve floor for display.
 		if (autoCompactBufferTokens === 0 && compactionSettings.enabled) {
 			autoCompactBufferTokens = effectiveReserveTokens(contextWindow, compactionSettings);
@@ -491,6 +506,12 @@ export function computeContextBreakdown(session: ContextUsageSession, options: C
 
 	const freeTokens = Math.max(0, contextWindow - usedTokens - autoCompactBufferTokens);
 
+	const scaledToCutoff =
+		options.scaleToCompaction === true &&
+		thresholdTokens !== undefined &&
+		contextWindow > 0 &&
+		thresholdTokens < contextWindow;
+
 	return {
 		model,
 		contextWindow,
@@ -499,6 +520,7 @@ export function computeContextBreakdown(session: ContextUsageSession, options: C
 		autoCompactBufferTokens,
 		freeTokens,
 		thresholdTokens,
+		scaledToCutoff,
 		snapcompact: options.snapcompact,
 	};
 }
@@ -564,8 +586,11 @@ function planCells(breakdown: ContextBreakdown): CellSpec[] {
 	for (let i = 0; i < freeCount; i++) {
 		cells.push({ glyph: CELL_FREE, color: "dim" });
 	}
+	// When scaled to the cutoff the buffer is uninhabitable reserved space, so
+	// it reads as grayed out instead of a still-reachable warning band.
+	const bufferColor: CellSpec["color"] = breakdown.scaledToCutoff ? "muted" : "warning";
 	for (let i = 0; i < bufferCount; i++) {
-		cells.push({ glyph: CELL_BUFFER, color: "warning" });
+		cells.push({ glyph: CELL_BUFFER, color: bufferColor });
 	}
 
 	// Pad to exactly GRID_CELLS in case rounding undershot.
@@ -602,11 +627,24 @@ function buildLegendParts(breakdown: ContextBreakdown): LegendPart[][] {
 		{ t: ` (${windowLabel} context)`, s: "dim" },
 	]);
 	lines.push([{ t: `${modelId}[${windowLabel}]`, s: "muted" }]);
-	lines.push([
-		{ t: formatNumber(usedTokens), s: "strong" },
-		{ t: `/${windowLabel} tokens`, s: "dim" },
-		{ t: ` (${percentString(usedTokens, contextWindow)})`, s: "muted" },
-	]);
+	if (breakdown.scaledToCutoff && breakdown.thresholdTokens !== undefined) {
+		// Scaled mode: current/cutoff/total with the cutoff-side percent first.
+		const cutoffLabel = formatNumber(breakdown.thresholdTokens).toLowerCase();
+		lines.push([
+			{ t: formatNumber(usedTokens), s: "strong" },
+			{ t: `/${cutoffLabel}/${windowLabel} tokens`, s: "dim" },
+			{
+				t: ` (${percentString(usedTokens, breakdown.thresholdTokens)}/${percentString(usedTokens, contextWindow)})`,
+				s: "muted",
+			},
+		]);
+	} else {
+		lines.push([
+			{ t: formatNumber(usedTokens), s: "strong" },
+			{ t: `/${windowLabel} tokens`, s: "dim" },
+			{ t: ` (${percentString(usedTokens, contextWindow)})`, s: "muted" },
+		]);
+	}
 	lines.push([]);
 	lines.push([{ t: "Estimated usage by category", s: "muted" }]);
 
@@ -631,7 +669,7 @@ function buildLegendParts(breakdown: ContextBreakdown): LegendPart[][] {
 
 	if (autoCompactBufferTokens > 0) {
 		lines.push([
-			{ t: CELL_BUFFER, s: "warning" },
+			{ t: CELL_BUFFER, s: breakdown.scaledToCutoff ? "muted" : "warning" },
 			{ t: " Autocompact buffer: " },
 			{ t: formatNumber(autoCompactBufferTokens), s: "strong" },
 			{ t: " " },
@@ -737,7 +775,7 @@ function contextMeterParts(
 	if (breakdown.autoCompactBufferTokens > 0) {
 		parts.push({
 			value: breakdown.autoCompactBufferTokens / window,
-			token: "warning",
+			token: breakdown.scaledToCutoff ? "muted" : "warning",
 			hatch: true,
 			label: `Autocompact buffer · ${formatNumber(breakdown.autoCompactBufferTokens)} tokens (${percentString(breakdown.autoCompactBufferTokens, window)})`,
 		});
@@ -858,17 +896,26 @@ function describeContextFrame(breakdown: ContextBreakdown): NativeNode {
 			: usedTokens >= thresholdTokens
 				? `Past auto-compaction at ${percentString(thresholdTokens, window, 0)}`
 				: `${formatNumber(thresholdTokens - usedTokens)} left before auto-compaction at ${percentString(thresholdTokens, window, 0)}`;
+	const scaled = breakdown.scaledToCutoff === true;
+	const usedSpans =
+		scaled && thresholdTokens !== undefined
+			? // Scaled mode: current/cutoff/total with the cutoff-side percent first.
+				[
+					span(formatNumber(usedTokens), "strong"),
+					span(
+						`/${formatNumber(thresholdTokens).toLowerCase()}/${formatNumber(window).toLowerCase()} tokens · ${percentString(usedTokens, thresholdTokens, 0)}/${percentString(usedTokens, window, 0)}`,
+						"dim",
+					),
+				]
+			: [
+					span(formatNumber(usedTokens), "strong"),
+					span(` of ${formatNumber(window)} tokens · ${percentString(usedTokens, window, 0)}`, "dim"),
+				];
 	const summary = node(
 		"row",
 		{ role: "omp.context.summary", align: "baseline", wrap: true },
 		[
-			text(
-				[
-					span(formatNumber(usedTokens), "strong"),
-					span(` of ${formatNumber(window)} tokens · ${percentString(usedTokens, window, 0)}`, "dim"),
-				],
-				{ role: "omp.context.used", grow: 1, wrap: "none" },
-			),
+			text(usedSpans, { role: "omp.context.used", grow: 1, wrap: "none" }),
 			text(room, { role: "omp.context.room", wrap: "none" }),
 		],
 		"summary",
@@ -905,7 +952,7 @@ function describeContextFrame(breakdown: ContextBreakdown): NativeNode {
 			contextShareRow(
 				"buffer",
 				"omp.context.cat.buffer",
-				span("▨", "warning"),
+				span("▨", scaled ? "muted" : "warning"),
 				"Autocompact buffer",
 				autoCompactBufferTokens,
 				window,

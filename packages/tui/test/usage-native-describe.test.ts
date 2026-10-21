@@ -412,6 +412,59 @@ describe("ContextUsageView.describe", () => {
 	});
 });
 
+/**
+ * Contract: with `tui.scaleGaugeToCompaction` on, the native /context
+ * frame reads current/cutoff/total with the cutoff-side percent first and the
+ * reserved buffer part of the bar grays out as unusable space. Room text and
+ * the compaction mark keep their whole-window framing.
+ */
+describe("ContextUsageView.describe cutoff-scaled", () => {
+	const scaledBreakdown = computeContextBreakdown(
+		{
+			model: { id: "demo", name: "Demo Model", contextWindow: 200_000 } as never,
+			agent: { tokenizer: {} as never },
+			getContextBreakdown: () => ({
+				messagesTokens: 12_000,
+				skillsTokens: 0,
+				systemToolsTokens: 3_900,
+				systemContextTokens: 112,
+				systemPromptTokens: 2_600,
+				usedTokens: 18_612,
+			}),
+		} as never,
+		{ compaction: { ...DEFAULT_COMPACTION_SETTINGS, thresholdPercent: 85 }, scaleToCompaction: true },
+	);
+
+	const texts = (root: NativeNode, role: string): string[] =>
+		findAll(root, n => n.k === "text" && n.p?.role === role).map(n =>
+			n.k === "text" ? (n.p?.text ?? (n.p?.spans ?? []).map(s => s.t).join("")) : "",
+		);
+
+	it("reads current/cutoff/total with the cutoff-side percent first", () => {
+		const described = new ContextUsageView(scaledBreakdown, theme).describe(cx);
+		expect(texts(described, "omp.context.used")[0]).toMatch(/^19K\/170k\/200k tokens · 11%\/9%$/);
+		// Room still talks about the whole window: the cutoff is where compaction fires.
+		expect(texts(described, "omp.context.room")[0]).toMatch(/left before auto-compaction at 85%$/);
+	});
+
+	it("grays the buffer bar part out while the threshold mark stays at the raw-window position", () => {
+		const view = new ContextUsageView(scaledBreakdown, theme);
+		const described = view.describe(cx);
+		const bar = findAll(described, n => n.k === "meter" && n.p?.style === "bar")[0];
+		if (bar?.k !== "meter") throw new Error("no bar meter");
+		const parts = bar.p?.parts ?? [];
+		expect(parts.at(-1)?.token).toBe("muted");
+		expect(parts.at(-1)?.hatch).toBe(true);
+		expect(parts.at(-1)?.value).toBeCloseTo(30_000 / 200_000);
+		expect(bar.p?.marks?.[0]?.at).toBeCloseTo(0.85);
+		const rows = findAll(described, n => n.k === "row" && n.p?.role === "omp.context.cat.buffer");
+		expect(rows).toHaveLength(1);
+		// The legend swatch of the buffer row is muted so it matches the bar.
+		const swatch = rows[0]?.c?.filter(isNode).find(child => child.p?.role === "omp.context.swatch");
+		expect(swatch?.k === "text" && swatch.p?.spans?.[0]?.s).toBe("muted");
+	});
+});
+
 describe("createUsageRowBlock describe", () => {
 	it("declares throughput as a rate and omits it for sub-100ms requests", () => {
 		const usage = {

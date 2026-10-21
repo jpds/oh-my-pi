@@ -5,6 +5,7 @@
 ### Added
 
 - Added `tui.scaleGaugeToCompaction` support to the context gauge: with the setting on, the gauge's percentage, bar fill and window label measure toward the auto-compaction cutoff instead of the full model window, so the bar reaches 100% where compaction fires; level colors keep their raw-window thresholds. Segment contexts carry the scale as `gaugeScale`/`gaugeWindow`.
+- Added `tui.scaleGaugeToCompaction` support to the /context panel: with the setting on, the panel's headline reads `current/cutoff/total tokens` with a cutoff-side percent first (e.g. `108K/280K/1m tokens (38.4%/10.3%)`), and the reserved past-cutoff cells gray out as unusable space instead of drawing as a still-reachable warning band.
 
 ## [18.12.4] - 2026-10-20
 
