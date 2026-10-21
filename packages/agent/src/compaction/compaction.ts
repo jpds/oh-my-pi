@@ -189,6 +189,16 @@ export interface CompactionSettings {
 	 * explicit value — even one equal to the default — is always honored.
 	 */
 	reserveTokens?: number;
+	/**
+	 * Every method the policy can run is local (`snapcompact`, `shake`), so no
+	 * summarizer request ever needs room under the window.
+	 *
+	 * The 15%-of-window floor in {@link effectiveReserveTokens} exists to fit a
+	 * summarizer prompt plus its summary. Without one, the reserve only covers
+	 * the next request: its default stops scaling with the window and an
+	 * explicit {@link reserveTokens} is used exactly.
+	 */
+	localMethodsOnly?: boolean;
 	keepRecentTokens: number;
 	autoContinue?: boolean;
 	remoteEnabled?: boolean;
@@ -318,9 +328,20 @@ export function getLastAssistantUsage(entries: SessionEntry[]): Usage | undefine
 /**
  * Effective reserve: at least 15% of context window or the configured floor
  * (defaulting to {@link DEFAULT_RESERVE_TOKENS} when unset), whichever is larger.
+ *
+ * A policy with no summarizing method ({@link CompactionSettings.localMethodsOnly})
+ * has no compaction request to fit, so its reserve only has to cover the next
+ * request: the default is capped at {@link DEFAULT_RESERVE_TOKENS} instead of
+ * growing to 15% of a large window, and an explicit reserve is used exactly —
+ * including one below the floor.
  */
 export function effectiveReserveTokens(contextWindow: number, settings: CompactionSettings): number {
-	return Math.max(Math.floor(contextWindow * 0.15), settings.reserveTokens ?? DEFAULT_RESERVE_TOKENS);
+	const proportional = Math.floor(contextWindow * 0.15);
+	const configured = settings.reserveTokens;
+	if (settings.localMethodsOnly === true) {
+		return configured !== undefined && configured > 0 ? configured : Math.min(proportional, DEFAULT_RESERVE_TOKENS);
+	}
+	return Math.max(proportional, configured ?? DEFAULT_RESERVE_TOKENS);
 }
 
 /**

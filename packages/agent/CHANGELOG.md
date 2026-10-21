@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `CompactionSettings.localMethodsOnly` stops the effective reserve scaling with the window when no configured method summarizes: the default is capped at `DEFAULT_RESERVE_TOKENS` and an explicit `reserveTokens` is used exactly, including below the 15% floor
+
 ## [18.12.4] - 2026-10-20
 
 ### Fixed
