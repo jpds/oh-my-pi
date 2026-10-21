@@ -397,6 +397,7 @@ import {
 	cfgTuiMouse,
 	cfgTuiRenderMermaid,
 	cfgTuiRenderSvg,
+	cfgTuiScaleGaugeToCompaction,
 	cfgTuiResizeScrollback,
 	cfgTuiCompleteScrollback,
 	cfgTuiTextSizing,
@@ -482,6 +483,7 @@ const cfgLiveUiSettings = combine({
 	"statusLine.segmentOptions": cfgStatusLineSegmentOptions,
 	"statusLine.compactThinkingLevel": cfgStatusLineCompactThinkingLevel,
 	"statusLine.contextLine": cfgStatusLineContextLine,
+	"tui.scaleGaugeToCompaction": cfgTuiScaleGaugeToCompaction,
 	"git.enabled": cfgGitEnabled,
 	"advisor.enabled": cfgAdvisorEnabled,
 	"advisor.maxNotesPerUpdate": cfgAdvisorMaxNotesPerUpdate,
@@ -3803,6 +3805,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"statusLine.segmentOptions",
 				"statusLine.compactThinkingLevel",
 				"statusLine.contextLine",
+				"tui.scaleGaugeToCompaction",
 				"git.enabled",
 			)
 		) {
@@ -3832,6 +3835,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			segmentOptions: cfgStatusLineSegmentOptions.get(settings),
 			compactThinkingLevel: cfgStatusLineCompactThinkingLevel.get(settings),
 			contextLine: cfgStatusLineContextLine.get(settings),
+			scaleGaugeToCompaction: cfgTuiScaleGaugeToCompaction.get(settings),
 		});
 	}
 	syncComposerShape(): void {

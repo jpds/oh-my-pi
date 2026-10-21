@@ -452,6 +452,19 @@ export const cfgTuiRenderMermaid = register({
 	},
 });
 
+export const cfgTuiScaleGaugeToCompaction = register({
+	id: "tui.scaleGaugeToCompaction",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Scale Context Usage To Compaction",
+		description:
+			"Measure context usage toward the auto-compaction cutoff instead of the full window, in the status line gauge and the /context panel: both reach 100% at the cutoff, and the reserved past-cutoff space grays out.",
+	},
+});
+
 export const cfgTuiRenderSvg = register({
 	id: "tui.renderSvg",
 	type: "boolean",

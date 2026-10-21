@@ -2722,6 +2722,30 @@ export class Settings {
 		delete raw.collapseChangelog;
 		delete raw["startup.changelogMode"];
 
+		// statusLine.scaleGaugeToCompaction -> tui.scaleGaugeToCompaction: the
+		// scale outgrew the status line — the /context panel follows the same
+		// cutoff — so it moved beside the other terminal-display options.
+		// Handles nested and quoted-dotted legacy keys; an explicit new key wins.
+		const legacyStatusLineObj = isRecord(raw.statusLine) ? (raw.statusLine as Record<string, unknown>) : undefined;
+		const legacyGaugeScale =
+			typeof legacyStatusLineObj?.scaleGaugeToCompaction === "boolean"
+				? legacyStatusLineObj.scaleGaugeToCompaction
+				: typeof raw["statusLine.scaleGaugeToCompaction"] === "boolean"
+					? (raw["statusLine.scaleGaugeToCompaction"] as boolean)
+					: undefined;
+		if (legacyGaugeScale !== undefined) {
+			if (!isRecord(raw.tui)) raw.tui = {};
+			const targetTui = raw.tui as Record<string, unknown>;
+			if (typeof targetTui.scaleGaugeToCompaction !== "boolean") {
+				targetTui.scaleGaugeToCompaction = legacyGaugeScale;
+			}
+		}
+		delete raw["statusLine.scaleGaugeToCompaction"];
+		if (legacyStatusLineObj) {
+			delete legacyStatusLineObj.scaleGaugeToCompaction;
+			if (Object.keys(legacyStatusLineObj).length === 0) delete raw.statusLine;
+		}
+
 		// Migrate old flat "theme" string to nested theme.dark/theme.light
 		if (typeof raw.theme === "string") {
 			const oldTheme = raw.theme;

@@ -67,6 +67,8 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 		contextPercent: 62,
 		contextTokens: 124_000,
 		contextWindow: GALLERY_CONTEXT_WINDOW,
+		gaugeScale: 1,
+		gaugeWindow: GALLERY_CONTEXT_WINDOW,
 		autoCompactEnabled: true,
 		compactionSpeculation: "idle",
 		speculationBlinkOn: false,

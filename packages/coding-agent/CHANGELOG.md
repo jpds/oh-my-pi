@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `tui.scaleGaugeToCompaction` (Appearance → Display, "Scale Context Usage To Compaction"): the context gauge — in both the status line and the `/context` panel — fills toward the auto-compaction cutoff instead of the full context window; percentages run to 100% at the cutoff, the `/context` headline reads `current/cutoff/total tokens` with a cutoff-side percent first (e.g. `108K/280K/1m tokens (38.4%/10.3%)`), and the reserved past-cutoff space grays out as unusable. Values saved under the earlier `statusLine.scaleGaugeToCompaction` id (prototype deploys) migrate automatically.
+
 ### Changed
 
 - Local-model side runtimes (`tiny-title-runtime`, `stt-runtime`, `tts-runtime`, `tiny-mlx-runtime`) now install under `<tiny-models-cache>/runtimes/` instead of the cache's parent directory, so `PI_TINY_MODELS_CACHE` pointing at a persistent writable directory (e.g. a Nix/container deployment) keeps runtimes across reboots; first use after this change re-installs once into the new path.
@@ -9,6 +13,7 @@
 ### Fixed
 
 - Fixed `/extensions` listing extensions configured only through the `extensions:` setting in YAML config (including the declarative `PI_CONFIG_DECLARATIVE_FILES` layer): they loaded at startup but the dashboard read only legacy `settings.json`, so they were invisible and untogglable; the native provider now resolves the effective `extensions` value from Settings, session extension roots, or the persisted config chain, and ACP `_omp/extensions` binds its Settings instance first so the declarative layer is visible there too.
+
 ## [18.12.4] - 2026-10-20
 
 ### Added

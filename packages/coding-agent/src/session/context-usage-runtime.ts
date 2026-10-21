@@ -1,4 +1,4 @@
-import { type CompactionSettings, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
+import { type CompactionSettings } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import {
 	computeCompactionBoundaries,
@@ -6,6 +6,7 @@ import {
 	type CompactionBoundaries,
 	type ContextBreakdown,
 	type ContextSavingsEstimate,
+	resolveCutoffTokens,
 } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { ScopeLike } from "../config/registry";
 import type { AgentSession } from "./agent-session";
@@ -15,6 +16,7 @@ import { resolveModelCompactionSettings } from "./model-compaction-threshold";
 import { resolveSpeculationLeadTokens } from "./speculation-lead";
 
 import { cfgSkillful } from "./settings";
+import { cfgTuiScaleGaugeToCompaction } from "../modes/settings";
 import { cfgSnapcompactShape, cfgSnapcompactSystemPrompt, cfgSnapcompactToolResults } from "./context-settings";
 
 /** Resolve session policy before handing pure boundary arithmetic to the UI. */
@@ -26,14 +28,13 @@ export function getSessionCompactionBoundaries(
 	if (!(contextWindow > 0)) return null;
 	const configured = resolveModelCompactionSettings(settings, model);
 	const compaction: CompactionSettings = configured;
-	if (!compaction.enabled || compaction.strategy === "off") return null;
-	const threshold = resolveThresholdTokens(contextWindow, compaction);
-	if (!(threshold > 0) || threshold > contextWindow) return null;
+	const cutoffTokens = resolveCutoffTokens(compaction, contextWindow);
+	if (cutoffTokens === undefined) return null;
 	const speculates = configured.asyncEnabled !== false && resolveSpeculationMethod(model, configured) !== undefined;
 	return computeCompactionBoundaries(
 		compaction,
 		contextWindow,
-		speculates ? resolveSpeculationLeadTokens(threshold) : undefined,
+		speculates ? resolveSpeculationLeadTokens(cutoffTokens) : undefined,
 	);
 }
 
@@ -59,6 +60,7 @@ export function computeSessionContextBreakdown(
 		compaction: resolveModelCompactionSettings(session.settings, session.model),
 		sourceRevision: session.settings.revision,
 		skillful: cfgSkillful.get(session.settings),
+		scaleToCompaction: cfgTuiScaleGaugeToCompaction.get(session.settings),
 		snapcompact,
 	});
 }

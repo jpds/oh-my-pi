@@ -146,6 +146,7 @@ import {
 	cfgStatusLineLeftSegments,
 	cfgStatusLinePreset,
 	cfgStatusLineRightSegments,
+	cfgTuiScaleGaugeToCompaction,
 	cfgStatusLineSegmentOptions,
 	cfgStatusLineSeparator,
 	cfgStatusLineSessionAccent,
@@ -374,6 +375,7 @@ export class SelectorController {
 								transparent: cfgStatusLineTransparent.get(settings),
 								compactThinkingLevel: cfgStatusLineCompactThinkingLevel.get(settings),
 								contextLine: cfgStatusLineContextLine.get(settings),
+								scaleGaugeToCompaction: cfgTuiScaleGaugeToCompaction.get(settings),
 								segmentOptions: cfgStatusLineSegmentOptions.get(settings),
 								...previewSettings,
 							});
@@ -407,6 +409,7 @@ export class SelectorController {
 								transparent: cfgStatusLineTransparent.get(settings),
 								compactThinkingLevel: cfgStatusLineCompactThinkingLevel.get(settings),
 								contextLine: cfgStatusLineContextLine.get(settings),
+								scaleGaugeToCompaction: cfgTuiScaleGaugeToCompaction.get(settings),
 								segmentOptions: cfgStatusLineSegmentOptions.get(settings),
 							});
 							this.ctx.ui.requestRender();

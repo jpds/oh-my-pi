@@ -32,6 +32,7 @@ import {
 	cfgSetupVersion,
 	cfgStatusLineLeftSegments,
 	cfgSpellingAutocomplete,
+	cfgTuiScaleGaugeToCompaction,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import {
@@ -1394,6 +1395,22 @@ describe("Settings", () => {
 			expect(cfgInlineToolDescriptors.get(Settings.isolated({ inlineToolDescriptors: true }))).toBe("on");
 			expect(cfgInlineToolDescriptors.get(Settings.isolated({ inlineToolDescriptors: false }))).toBe("off");
 			expect(cfgInlineToolDescriptors.get(Settings.isolated())).toBe("auto");
+		});
+
+		it("migrates legacy statusLine.scaleGaugeToCompaction keys to tui.scaleGaugeToCompaction", () => {
+			expect(
+				cfgTuiScaleGaugeToCompaction.get(Settings.isolated({ "statusLine.scaleGaugeToCompaction": true })),
+			).toBe(true);
+			expect(
+				cfgTuiScaleGaugeToCompaction.get(Settings.isolated({ statusLine: { scaleGaugeToCompaction: true } })),
+			).toBe(true);
+			// An explicitly configured new key wins over a migrated legacy value.
+			expect(
+				cfgTuiScaleGaugeToCompaction.get(
+					Settings.isolated({ "statusLine.scaleGaugeToCompaction": true, "tui.scaleGaugeToCompaction": false }),
+				),
+			).toBe(false);
+			expect(cfgTuiScaleGaugeToCompaction.get(Settings.isolated())).toBe(false);
 		});
 	});
 
