@@ -8,6 +8,7 @@
 
 ### Changed
 
+- The auto-compaction reserve now stops scaling with the window when every configured method is local (`snapcompact`/`shake`): the default stays at 16K instead of 15% (30K on a 200K window, 150K on 1M), and an explicit `compaction.reserveTokens` is honored exactly instead of being floored to 15% — there is no summarizer request for that floor to fit
 - Local-model side runtimes (`tiny-title-runtime`, `stt-runtime`, `tts-runtime`, `tiny-mlx-runtime`) now install under `<tiny-models-cache>/runtimes/` instead of the cache's parent directory, so `PI_TINY_MODELS_CACHE` pointing at a persistent writable directory (e.g. a Nix/container deployment) keeps runtimes across reboots; first use after this change re-installs once into the new path.
 
 ### Fixed
