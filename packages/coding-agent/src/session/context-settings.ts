@@ -409,7 +409,15 @@ export const cfgCompaction = combine({
  * never configured directly: a `compaction.modelThresholds` token entry sets it
  * for its model (see `applyModelCompactionThreshold`).
  */
-export type CompactionSettings = SettingValueOf<typeof cfgCompaction> & { baseWindowTokens?: number };
+export type CompactionSettings = SettingValueOf<typeof cfgCompaction> & {
+	baseWindowTokens?: number;
+	/**
+	 * Derived, never configured: every configured method is local, so the
+	 * reserve stops scaling with the window (see
+	 * `CompactionSettings.localMethodsOnly` in the engine).
+	 */
+	localMethodsOnly?: boolean;
+};
 
 // Experimental: snapcompact inline imaging (transient, per-request; never persisted)
 export const cfgSnapcompactSystemPrompt = register({

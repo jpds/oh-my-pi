@@ -77,6 +77,28 @@ export function resolveCompactionMethodOrder(value: unknown): CompactionMethod[]
 	return methods;
 }
 
+/** Methods that finish in-process, with no summarizer request to fit under the window. */
+const LOCAL_COMPACTION_METHODS: Record<CompactionMethod, boolean> = {
+	remote: false,
+	snapcompact: true,
+	handoff: false,
+	shake: true,
+	soft: false,
+};
+
+/**
+ * Whether every configured method is local (`snapcompact`/`shake`), so the
+ * policy never issues a summarizer request and its reserve only has to cover
+ * the next request (see `CompactionSettings.localMethodsOnly`).
+ *
+ * Configured, not available: a method that cannot run for the active model is
+ * skipped at run time, so counting it here only keeps the larger reserve.
+ */
+export function hasOnlyLocalCompactionMethods(methodOrder: unknown): boolean {
+	const methods = resolveCompactionMethodOrder(methodOrder);
+	return methods.length > 0 && methods.every(method => LOCAL_COMPACTION_METHODS[method]);
+}
+
 const STRATEGY_BY_COMPACTION_METHOD: Record<CompactionMethod, "context-full" | "handoff" | "shake" | "snapcompact"> = {
 	remote: "context-full",
 	snapcompact: "snapcompact",

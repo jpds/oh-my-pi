@@ -368,3 +368,39 @@ describe("compaction.modelThresholds", () => {
 		});
 	});
 });
+
+describe("local-only compaction methods", () => {
+	it("stops scaling the reserve with the window when no method summarizes", () => {
+		const model = { provider: "anthropic", id: "claude-local" };
+		const window = 200_000;
+		const local = Settings.isolated({ "compaction.methodOrder": ["snapcompact"] });
+		expect(resolveModelCompactionSettings(local, model)).toMatchObject({ localMethodsOnly: true });
+		// No summary prompt to fit: the default reserve is 16,384, not 15% (30,000).
+		expect(resolveThresholdTokens(window, resolveModelCompactionSettings(local, model))).toBe(183_616);
+
+		// An explicit reserve below the old floor now bites.
+		const explicit = Settings.isolated({
+			"compaction.methodOrder": ["snapcompact"],
+			"compaction.reserveTokens": 4_000,
+		});
+		expect(resolveThresholdTokens(window, resolveModelCompactionSettings(explicit, model))).toBe(196_000);
+
+		// Shake is local too, so an order of local methods keeps the smaller reserve.
+		const shake = Settings.isolated({ "compaction.methodOrder": ["shake", "snapcompact"] });
+		expect(resolveThresholdTokens(window, resolveModelCompactionSettings(shake, model))).toBe(183_616);
+	});
+
+	it("keeps the proportional reserve when any configured method can summarize", () => {
+		const model = { provider: "anthropic", id: "claude-local" };
+		for (const order of [
+			["snapcompact", "soft"],
+			["remote", "snapcompact"],
+			["snapcompact", "handoff"],
+		]) {
+			const settings = Settings.isolated({ "compaction.methodOrder": order });
+			const resolved = resolveModelCompactionSettings(settings, model);
+			expect(resolved.localMethodsOnly).toBeUndefined();
+			expect(resolveThresholdTokens(200_000, resolved)).toBe(170_000);
+		}
+	});
+});
