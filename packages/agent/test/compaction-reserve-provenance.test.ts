@@ -27,6 +27,36 @@ describe("compaction reserve provenance", () => {
 		expect(shouldCompact(2617, cw, settings)).toBe(true);
 	});
 
+	it("caps the defaulted reserve at the absolute default for a local-only policy", () => {
+		// No method summarizes, so nothing needs the 15% a summary prompt would occupy.
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdPercent: -1,
+			localMethodsOnly: true,
+			keepRecentTokens: 20000,
+		};
+		expect(effectiveReserveTokens(200_000, settings)).toBe(16384);
+		expect(resolveThresholdTokens(200_000, settings)).toBe(183_616);
+		// The cap is absolute, not a share: a 1M window keeps the same floor.
+		expect(effectiveReserveTokens(1_000_000, settings)).toBe(16384);
+		// Small windows still recover the proportional reserve.
+		expect(resolveBudgetReserveTokens(19_000, settings)).toBe(2850);
+	});
+
+	it("honors an explicit reserve below the proportional floor for a local-only policy", () => {
+		const settings: CompactionSettings = {
+			enabled: true,
+			thresholdPercent: -1,
+			localMethodsOnly: true,
+			reserveTokens: 8000,
+			keepRecentTokens: 20000,
+		};
+		expect(effectiveReserveTokens(200_000, settings)).toBe(8000);
+		expect(resolveThresholdTokens(200_000, settings)).toBe(192_000);
+		// A policy that can summarize keeps the 15% floor over the same value.
+		expect(effectiveReserveTokens(200_000, { ...settings, localMethodsOnly: false })).toBe(30_000);
+	});
+
 	it("replaces a defaulted reserve with the proportional fallback on the same window", () => {
 		// Identical window, but reserveTokens is unset: 16384 >= 19000 - 2850, so
 		// the defaulted reserve is effectively impossible and the 15% proportional
