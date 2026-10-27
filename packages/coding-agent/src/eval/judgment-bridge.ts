@@ -273,6 +273,7 @@ export function sessionJudge(
 		purpose,
 		telemetry: session.getTelemetry?.(),
 		cache: sharedJudgmentCache(),
+		costGate: session.costGate,
 		onUsage:
 			onUsage && journal
 				? usage => {

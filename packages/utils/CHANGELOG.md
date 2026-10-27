@@ -2,10 +2,44 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `PI_TINY_MODELS_CACHE`, which relocates the local tiny-model (and STT/TTS) weights cache directory — e.g. to a pre-seeded shared volume or Nix store path.
+
 ### Changed
 
 - Side-installed tiny-model runtimes (`tiny-title-runtime`, `stt-runtime`, `tts-runtime`, `tiny-mlx-runtime`) now live under `<tiny-models-cache>/runtimes/` (new `getTinyModelsRuntimesDir()`) instead of the cache's parent directory, so `PI_TINY_MODELS_CACHE` relocates the runtimes along with the weights; existing installs re-materialize into the new path on first use.
 - Added `PI_TINY_MODELS_RUNTIMES`, which overrides the tiny-model side-runtime root independently of `PI_TINY_MODELS_CACHE` — e.g. keeping the weights cache at a read-only Nix store path while the runtimes install into a writable directory; relative values are ignored, `~` is expanded.
+
+## [18.13.1] - 2026-10-27
+
+### Added
+
+- Added an optional `maxFractionDigits` to `formatNumber()` that caps decimals on values below 1,000 ([#16973](https://github.com/can1357/oh-my-pi/pull/16973) by [@DusKing1](https://github.com/DusKing1))
+
+## [18.13.0] - 2026-10-26
+
+### Added
+
+- Added `parseHeifImageMimeType()`, which identifies HEIC, HEIF and AVIF images from a file header ([#16612](https://github.com/can1357/oh-my-pi/pull/16612) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `$whichAll()`, which returns every PATH match for a command in PATH order ([#16824](https://github.com/can1357/oh-my-pi/issues/16824))
+
+### Changed
+
+- Faster lenient JSONL session parsing when recovering past malformed lines ([#16995](https://github.com/can1357/oh-my-pi/pull/16995) by [@GTanger](https://github.com/GTanger))
+
+### Fixed
+
+- `setProcessName()` no longer assigns `process.title` on Windows, where it overwrites the shared console title ([#16842](https://github.com/can1357/oh-my-pi/issues/16842))
+- `setProcessName()` no longer assigns `process.title` on Windows, where it overwrites the shared console title ([#16842](https://github.com/can1357/oh-my-pi/issues/16842))
+- Fixed inline code spans rendering flush against the surrounding text when a backslash preceded the closing backtick ([#16972](https://github.com/can1357/oh-my-pi/pull/16972) by [@akainth015](https://github.com/akainth015))
+
+## [18.12.6] - 2026-10-21
+
+### Added
+
+- Added `RpcConnection.requestCancellable()` and `Client.requestPermission(params, { signal })`; client connections abort a handler and answer `-32800` when the peer sends `$/cancel_request`, while agent connections keep running the request and return its real result ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
+
 ## [18.12.4] - 2026-10-20
 
 ### Breaking Changes
@@ -49,7 +83,6 @@
 
 ### Added
 
-- Added `PI_TINY_MODELS_CACHE`, which relocates the local tiny-model (and STT/TTS) weights cache directory — e.g. to a pre-seeded shared volume or Nix store path.
 - Exported `sqliteFileIdentity()`, so a caller holding a long-lived SQLite connection can tell when its path now names a different file (e.g. after a corrupt store was quarantined and replaced) ([#14361](https://github.com/can1357/oh-my-pi/pull/14361) by [@F0Rextasy](https://github.com/F0Rextasy))
 - Added `slugify()`, the shared lowercase ASCII kebab-case helper with an optional `maxLength` ([#14283](https://github.com/can1357/oh-my-pi/pull/14283) by [@jaredlyon](https://github.com/jaredlyon))
 

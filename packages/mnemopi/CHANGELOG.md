@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `embeddings.cacheDir` to `MnemopiEmbeddingRuntimeOptions`, so an embedding provider can point local model loads at a specific fastembed cache dir.
+
+## [18.13.0] - 2026-10-26
+
+### Fixed
+
+- Fixed polyphonic recall's graph voice finding no memories for non-English names (e.g. `Hà Nội`) or names of three or more words, and Vietnamese words like `tôi` being stored as the participant `i` ([#16723](https://github.com/can1357/oh-my-pi/issues/16723))
+
 ## [18.12.4] - 2026-10-20
 
 ### Fixed
@@ -19,9 +29,6 @@
 ### Fixed
 
 - Fixed a failing `mnemopi` CLI command or MCP memory call dropping the embeddings of memories it had just stored ([#15804](https://github.com/can1357/oh-my-pi/pull/15804) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-### Added
-
-- Added `embeddings.cacheDir` to `MnemopiEmbeddingRuntimeOptions`, so an embedding provider can point local model loads at a specific fastembed cache dir.
 
 ## [18.11.0] - 2026-10-14
 

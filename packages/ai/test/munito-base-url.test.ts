@@ -22,8 +22,10 @@ describe("Munito regional base URL redirect", () => {
 	const munitoModel = {
 		provider: "munito",
 		id: "qwen/qwen3.8-27b",
+		api: "openai-completions",
+		reasoning: true,
 		baseUrl: "https://api.munito.ai/inference/v1",
-	};
+	} as const;
 
 	test("redirects bundled munito models to MUNITO_BASE_URL when set", () => {
 		Bun.env.MUNITO_BASE_URL = "https://api.eu.munito.ai/inference/v1";
@@ -57,7 +59,13 @@ describe("Munito regional base URL redirect", () => {
 	test("does not redirect other openai-completions providers", () => {
 		Bun.env.MUNITO_BASE_URL = "https://api.eu.munito.ai/inference/v1";
 		const setup = resolveOpenAIRequestSetup(
-			{ provider: "openai", id: "gpt-5.5", baseUrl: "https://api.openai.com/v1" },
+			{
+				provider: "openai",
+				id: "gpt-5.5",
+				api: "openai-completions",
+				reasoning: false,
+				baseUrl: "https://api.openai.com/v1",
+			},
 			{ apiKey: "sk-openai", messages: [] },
 		);
 		expect(setup.baseUrl).toBe("https://api.openai.com/v1");

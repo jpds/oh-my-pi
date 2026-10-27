@@ -20,12 +20,14 @@ import {
 	parseDatedCostCards,
 } from "./pricing";
 import {
+	type AntigravityModelWireProfile,
 	type Api,
 	type EffectiveTokenCost,
 	MODEL_KINDS,
 	type JudgmentConfig,
 	type JudgmentUsageMap,
 	type Model,
+	type ModelAccountAccess,
 	type ModelCost,
 	type ModelSpec,
 } from "./types";
@@ -430,6 +432,42 @@ export function applyCatalogCorrections(
 }
 
 /**
+ * Lower discovered Antigravity per-SKU output caps to the host's
+ * `max-tokens-ceiling`. The transport sends a profile's `maxOutputTokens`
+ * verbatim, so a roster value above the ceiling (Claude 4.x advertises 65,536;
+ * Cloud Code Assist 400s past 64,000, #3067) must be corrected here as the
+ * row's `maxTokens` is.
+ */
+function capAntigravityWireProfiles(
+	model: Pick<Model<Api>, "antigravityWireProfiles" | "accountAccess">,
+	ceiling: unknown,
+): void {
+	if (typeof ceiling !== "number") return;
+	const cap = (
+		profiles: Readonly<Record<string, AntigravityModelWireProfile>> | undefined,
+	): Readonly<Record<string, AntigravityModelWireProfile>> | undefined => {
+		if (profiles === undefined) return undefined;
+		let capped: Record<string, AntigravityModelWireProfile> | undefined;
+		for (const [wireId, profile] of Object.entries(profiles)) {
+			if (profile.maxOutputTokens === undefined || profile.maxOutputTokens <= ceiling) continue;
+			capped ??= { ...profiles };
+			capped[wireId] = { ...profile, maxOutputTokens: ceiling };
+		}
+		return capped ?? profiles;
+	};
+	model.antigravityWireProfiles = cap(model.antigravityWireProfiles);
+	if (model.accountAccess === undefined) return;
+	let accountAccess: Record<string, ModelAccountAccess> | undefined;
+	for (const [accountKey, access] of Object.entries(model.accountAccess)) {
+		const profiles = cap(access.antigravityWireProfiles);
+		if (profiles === access.antigravityWireProfiles) continue;
+		accountAccess ??= { ...model.accountAccess };
+		accountAccess[accountKey] = { ...access, antigravityWireProfiles: profiles };
+	}
+	if (accountAccess !== undefined) model.accountAccess = accountAccess;
+}
+
+/**
  * Direct first-party OpenAI Responses endpoints (api.openai.com, Azure OpenAI
  * deployments). Gates GA computer-use detection; identity supplies the model
  * generation.
@@ -522,6 +560,7 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 	};
 	applyCatalogAssignments(model, policy.catalog, Object.hasOwn(spec, "judgment") && spec.judgment !== undefined);
 	applyCatalogCorrections(model, policy.catalog);
+	capAntigravityWireProfiles(model, policy.catalog.maxTokensCeiling);
 	// Configured kinds and lifetimes replace catalog values rather than merging with them.
 	if (spec.kindConfig !== undefined) model.kind = spec.kindConfig;
 	if (spec.promptCacheConfig !== undefined) model.promptCache = { ...spec.promptCacheConfig };
