@@ -588,6 +588,43 @@ function nanoGptPricingCost(pricing: unknown, fallback: TokenCost): TokenCost {
 	};
 }
 
+/**
+ * Canonical-reference recovery for resellers whose `/models` rows carry only
+ * `id`/`owned_by`: an id bundled on the discovering provider hydrates through
+ * {@link mapWithBundledReference}; anything else recovers intrinsic
+ * capabilities (context window, output limit, reasoning, thinking) from the
+ * bundled canonical reference index (`recover-canonical-params` providers).
+ * Identity, pricing, compat, and routes are never borrowed: a host with no
+ * per-model tariff stays zeroed.
+ */
+export function mapCanonicalReferenceModel<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	if (reference) {
+		return mapWithBundledReference(entry, defaults, reference);
+	}
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as ModelSpec<TApi> | undefined;
+	if (!canonical) {
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	}
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		...(canonical.thinking && { thinking: canonical.thinking }),
+		contextWindow,
+		maxTokens,
+	};
+}
+
 function normalizeAnthropicBaseUrl(baseUrl: string | undefined, fallback: string): string {
 	const value = baseUrl?.trim();
 	if (!value) {
@@ -828,6 +865,7 @@ type OpenAICompatibleModelManagerBuilderOptions<TApi extends Api> = {
 	dynamicReasoningAuthoritative?: true;
 	/** Live rows are the whole truth for input modality (no OR-merge with the bundle). */
 	dynamicInputAuthoritative?: true;
+	dynamicRunnerRowsAuthoritative?: true;
 	requireApiKey?: true;
 	dropCachedModelIdsOnStaticMismatch?: readonly string[];
 	cacheProviderId?: string;
@@ -857,6 +895,7 @@ function createOpenAICompatibleModelManagerOptions<TApi extends Api>(
 		...(options.dynamicModelsAuthoritative && { dynamicModelsAuthoritative: true }),
 		...(options.dynamicReasoningAuthoritative && { dynamicReasoningAuthoritative: true }),
 		...(options.dynamicInputAuthoritative && { dynamicInputAuthoritative: true }),
+		...(options.dynamicRunnerRowsAuthoritative && { dynamicRunnerRowsAuthoritative: true }),
 		...(options.dropCachedModelIdsOnStaticMismatch && {
 			dropCachedModelIdsOnStaticMismatch: options.dropCachedModelIdsOnStaticMismatch,
 		}),
@@ -1216,50 +1255,6 @@ export interface GmiCloudModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-/**
- * Map a discovered GMI Cloud model to a full spec.
- *
- * GMI's `/v1/models` returns only bare `{id}` rows, so discovery defaults carry
- * no limits, reasoning, or thinking metadata. When a gmi-cloud bundled
- * reference exists (the seeded default) it supplies GMI's published tariff and
- * limits directly. Every other id is an open-weight model GMI resells under its
- * canonical id (`deepseek-ai/…`, `moonshotai/…`, `zai-org/…`, `Qwen/…`), so its
- * intrinsic capabilities — context window, output limit, reasoning, thinking
- * ladder — are recovered from any bundled upstream entry via the canonical
- * reference index. Pricing is deliberately never borrowed across providers:
- * GMI's per-model tariff is unknown for these ids, so cost stays zeroed rather
- * than inheriting another provider's rate.
- */
-function mapGmiCloudModel(
-	entry: OpenAICompatibleModelRecord,
-	defaults: ModelSpec<"openai-completions">,
-	reference: ModelSpec<"openai-completions"> | undefined,
-): ModelSpec<"openai-completions"> {
-	if (reference) {
-		return mapWithBundledReference(entry, defaults, reference);
-	}
-	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as
-		| ModelSpec<"openai-completions">
-		| undefined;
-	if (!canonical) {
-		return { ...defaults, name: toModelName(entry.name, defaults.name) };
-	}
-	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
-	const maxTokens =
-		canonical.maxTokens != null && contextWindow != null
-			? Math.min(canonical.maxTokens, contextWindow)
-			: (canonical.maxTokens ?? defaults.maxTokens);
-	return {
-		...defaults,
-		name: toModelName(entry.name, canonical.name ?? defaults.name),
-		reasoning: canonical.reasoning,
-		input: canonical.input,
-		...(canonical.thinking && { thinking: canonical.thinking }),
-		contextWindow,
-		maxTokens,
-	};
-}
-
 export function gmiCloudModelManagerOptions(
 	config?: GmiCloudModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -1270,7 +1265,7 @@ export function gmiCloudModelManagerOptions(
 		cacheProviderId: resolveModelCacheProviderId("gmi-cloud"),
 		config,
 		requireApiKey: true,
-		mapModel: mapGmiCloudModel,
+		mapModel: mapCanonicalReferenceModel,
 	});
 }
 
