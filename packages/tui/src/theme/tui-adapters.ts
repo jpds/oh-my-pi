@@ -8,7 +8,8 @@ import {
 import type { EditorTheme } from "../components/editor";
 import type { MarkdownTheme } from "../components/markdown";
 import type { SelectListTheme } from "../components/select-list";
-import { DECLARED_SETTING_COLOR, type SettingsListTheme } from "../components/settings-list";
+import { DECLARED_SETTING_COLOR } from "./schema";
+import type { SettingsListTheme } from "../components/settings-list";
 import type { SymbolTheme } from "../symbols";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";

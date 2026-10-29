@@ -115,6 +115,15 @@ export type ThemeColor =
 	| "statusLineCost"
 	| "statusLineSubagents";
 
+/**
+ * Theme token for rows whose value the machine's declarative settings layer declares: the counterpart
+ * of the `statusLineGitDirty` hue that paints changed rows, so a declared value reads as the baseline
+ * rather than as an edit the user made. Every bundled theme defines it in a saturated hue that no
+ * theme reuses for `changed`, the muted tier, or plain text. Lives here, not in `settings-list`, so
+ * the theme adapters can read it without pulling the settings list (and `tui`) into the theme graph.
+ */
+export const DECLARED_SETTING_COLOR: ThemeColor = "statusLineGitClean";
+
 /** Set of all valid ThemeColor string values for runtime validation */
 const THEME_COLOR_RECORD = {
 	accent: true,

@@ -10,6 +10,32 @@
 
 - Side-installed tiny-model runtimes (`tiny-title-runtime`, `stt-runtime`, `tts-runtime`, `tiny-mlx-runtime`) now live under `<tiny-models-cache>/runtimes/` (new `getTinyModelsRuntimesDir()`) instead of the cache's parent directory, so `PI_TINY_MODELS_CACHE` relocates the runtimes along with the weights; existing installs re-materialize into the new path on first use.
 - Added `PI_TINY_MODELS_RUNTIMES`, which overrides the tiny-model side-runtime root independently of `PI_TINY_MODELS_CACHE` — e.g. keeping the weights cache at a read-only Nix store path while the runtimes install into a writable directory; relative values are ignored, `~` is expanded.
+## [18.14.0] - 2026-10-29
+
+### Added
+
+- Added `logger.withContext(fields, fn)` to attach contextual fields to all records produced during a function and its asynchronous work, plus `logger.withoutContext(fn)` for work that should not inherit caller context.
+
+### Fixed
+
+- Fixed `untilAborted` so promises passed to an already-aborted signal are still observed, preventing later rejections from being reported as unhandled.
+
+## [18.13.3] - 2026-10-28
+
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
+## [18.13.2] - 2026-10-27
+
+### Added
+
+- Added `deadlineMs` and `waitMessage` cleanup registration options: shutdown waits longer for that callback, but only while it is still pending, and says so on stderr once nothing else is left to wait for ([#17128](https://github.com/can1357/oh-my-pi/pull/17128) by [@sjawhar](https://github.com/sjawhar))
+- A process stopped by SIGTERM now prints its registered recovery commands after the terminal is handed back, so a stopped omp session shows `omp --resume <id>` instead of leaving its last frame above the shell prompt like a crash ([#17119](https://github.com/can1357/oh-my-pi/pull/17119) by [@sjawhar](https://github.com/sjawhar))
+
+### Fixed
+
+- Fixed plain TAR archives requiring a whole-container memory buffer to list entries or read a selected member ([#17175](https://github.com/can1357/oh-my-pi/pull/17175) by [@alphastorm](https://github.com/alphastorm))
 
 ## [18.13.1] - 2026-10-27
 

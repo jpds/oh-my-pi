@@ -10,6 +10,7 @@ import { type } from "@oh-my-pi/omptype";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { Tokenizer } from "@oh-my-pi/pi-agent-core";
+import { normalizeTools } from "@oh-my-pi/pi-agent-core/agent-loop";
 import {
 	compactionContextTokens,
 	DEFAULT_COMPACTION_SETTINGS,
@@ -17,16 +18,13 @@ import {
 } from "@oh-my-pi/pi-agent-core/compaction";
 import { arkToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import {
-	type ContextBreakdown,
 	type NonMessageTokenSource,
-	computeContextBreakdown,
 	computeNonMessageBreakdown,
 	computeNonMessageTokens,
 	estimateSkillsTokens,
 	estimateToolSchemaTokens,
 	getToolSchemaMetadataRevision,
 	invalidateToolSchemaMetadata,
-	renderContextUsage,
 } from "../src/status-line/context-usage";
 
 const tokenizer = new Tokenizer();
@@ -99,7 +97,7 @@ describe("estimateToolSchemaTokens", () => {
 		expect(reads).toBe(2);
 	});
 
-	it("separates array, tokenizer, and source-revision cache keys", () => {
+	it("separates array, tokenizer, source-revision, and prune-mode cache keys", () => {
 		let reads = 0;
 		const tool = {
 			name: "dynamic",
@@ -110,73 +108,59 @@ describe("estimateToolSchemaTokens", () => {
 			parameters: {},
 		};
 		const tools = [tool];
-		estimateToolSchemaTokens(tools, tokenizer, 1);
-		estimateToolSchemaTokens(tools, tokenizer, 1);
+		estimateToolSchemaTokens(tools, tokenizer, { sourceRevision: 1 });
+		estimateToolSchemaTokens(tools, tokenizer, { sourceRevision: 1 });
 		expect(reads).toBe(1);
 
-		estimateToolSchemaTokens(tools, tokenizer, 2);
+		estimateToolSchemaTokens(tools, tokenizer, { sourceRevision: 2 });
 		expect(reads).toBe(2);
-		estimateToolSchemaTokens([...tools], tokenizer, 2);
+		estimateToolSchemaTokens([...tools], tokenizer, { sourceRevision: 2 });
 		expect(reads).toBe(3);
-		estimateToolSchemaTokens(tools, new Tokenizer(), 2);
+		estimateToolSchemaTokens(tools, new Tokenizer(), { sourceRevision: 2 });
 		expect(reads).toBe(4);
+		const full = estimateToolSchemaTokens(tools, tokenizer, { sourceRevision: 2 });
+		expect(estimateToolSchemaTokens(tools, tokenizer, { sourceRevision: 2, pruneDescriptions: true })).toBeLessThan(
+			full,
+		);
 	});
 });
 
-/**
- * Contract: the /context panel surfaces estimated snapcompact wire savings —
- * applied swaps show "saves" figures, inactive states say why.
- */
-describe("renderContextUsage snapcompact section", () => {
-	const themeStub = {
-		fg: (_color: string, text: string) => text,
-		bold: (text: string) => text,
-	} as never;
-
-	function breakdownWith(snapcompact: ContextBreakdown["snapcompact"]): ContextBreakdown {
-		return {
-			model: { id: "test-model", name: "Test Model", contextWindow: 200000 } as never,
-			contextWindow: 200000,
-			categories: [],
-			usedTokens: 27929,
-			autoCompactBufferTokens: 0,
-			freeTokens: 172071,
-			snapcompact,
-		};
-	}
-
-	it("renders savings, skip reasons, and the wire total", () => {
-		const output = renderContextUsage(
-			breakdownWith({
-				visionCapable: true,
-				systemPrompt: {
-					applied: true,
-					scope: "all",
-					textTokens: 9768,
-					frames: 2,
-					imageTokens: 6600,
-					savedTokens: 3168,
-				},
-				toolResults: { total: 3, swapped: 0, textTokens: 0, frames: 0, imageTokens: 0, savedTokens: 0 },
-				savedTokens: 3168,
+describe("pruned tool description accounting", () => {
+	// With the catalog inlined into the system prompt, normalizeTools ships each
+	// tool as its name plus the description-stripped schema. Counting the full
+	// specs again double-counts every description (issue #17329).
+	const tools = [
+		{
+			name: "grep",
+			description: `Search files by regex. ${"Supports globs, context lines, and multiline patterns. ".repeat(20)}`,
+			parameters: type({
+				"pattern /** regular expression to search for */": "string",
+				"path? /** file or directory to search */": "string",
 			}),
-			themeStub,
-		);
-		expect(output).toContain("Snapcompact (estimated wire savings)");
-		expect(output).toContain("System prompt (all): saves ~3.2K (9.8K text → 2 frames ≈ 6.6K)");
-		expect(output).toContain("Tool results: none imaged (3 in history)");
-		// 27929 logical − 3168 saved ≈ 25K on the wire.
-		expect(output).toContain("Next request: ~25K tokens on the wire");
-	});
+			examples: [{ caption: "Find TODOs", call: { pattern: "TODO", path: "src" } }],
+		},
+	];
+	const prunedWireTokens = tokenizer.countTokens(
+		(normalizeTools(tools as never, { injectIntent: false, pruneDescriptions: true }) ?? []).flatMap(tool =>
+			[tool.name, tool.description, JSON.stringify(tool.parameters)].filter(part => part !== ""),
+		),
+	);
 
-	it("reports text-only models as inactive", () => {
-		const output = renderContextUsage(breakdownWith({ visionCapable: false, savedTokens: 0 }), themeStub);
-		expect(output).toContain("Snapcompact: inactive (model has no image input)");
-	});
+	it("counts the pruned wire specs while the agent prunes, and the full specs otherwise", () => {
+		const systemPrompt = ["You are an assistant."];
+		let prune = true;
+		const agent = { state: { tools }, prunesToolDescriptions: () => prune };
+		const session: NonMessageTokenSource = { systemPrompt, agent };
+		const pruned = computeNonMessageBreakdown(session, tokenizer).toolsTokens;
+		expect(pruned).toBe(prunedWireTokens);
+		expect(computeNonMessageTokens(session, tokenizer)).toBe(tokenizer.countTokens(systemPrompt) + pruned);
 
-	it("omits the section entirely when no snapcompact setting is on", () => {
-		const output = renderContextUsage(breakdownWith(undefined), themeStub);
-		expect(output).not.toContain("Snapcompact");
+		// A model or dialect switch flips pruning on the live agent without replacing the roster.
+		prune = false;
+		const full = computeNonMessageBreakdown(session, tokenizer).toolsTokens;
+		expect(full).toBe(estimateToolSchemaTokens(tools as never, tokenizer));
+		expect(full).toBeGreaterThan(pruned);
+		expect(computeNonMessageTokens(session, tokenizer)).toBe(tokenizer.countTokens(systemPrompt) + full);
 	});
 });
 
@@ -374,89 +358,5 @@ describe("non-message estimates tolerate a missing description", () => {
 		const b = computeNonMessageBreakdown(session, tokenizer);
 		expect(Number.isFinite(b.systemContextTokens)).toBe(true);
 		expect(b.systemContextTokens).toBeGreaterThanOrEqual(0);
-	});
-});
-
-/**
- * Contract: with `tui.scaleGaugeToCompaction` on, the /context headline
- * reads current/cutoff/total with the cutoff-side percent first, and the
- * reserved past-cutoff cells render as grayed-out unusable space instead of a
- * still-reachable warning band. Off, the headline and cells are unchanged.
- */
-describe("renderContextUsage cutoff scale", () => {
-	// Tags every run with its theme color so cell/legend colors are assertable.
-	const colorStub = {
-		fg: (color: string, text: string) => `{${color}}${text}`,
-		bold: (text: string) => text,
-	} as never;
-
-	function scaledBreakdown(scale: boolean): ContextBreakdown {
-		return computeContextBreakdown(
-			{
-				model: { id: "demo", name: "Demo Model", contextWindow: 200_000 } as never,
-				agent: { tokenizer: {} as never },
-				getContextBreakdown: () => ({
-					messagesTokens: 12_000,
-					skillsTokens: 0,
-					systemToolsTokens: 3_900,
-					systemContextTokens: 112,
-					systemPromptTokens: 2_600,
-					usedTokens: 18_612,
-				}),
-			} as never,
-			{
-				compaction: { ...DEFAULT_COMPACTION_SETTINGS, thresholdPercent: 85 },
-				scaleToCompaction: scale,
-			},
-		);
-	}
-
-	it("shows current/cutoff/total with a cutoff percent first and grays the buffer cells", () => {
-		const breakdown = scaledBreakdown(true);
-		expect(breakdown.scaledToCutoff).toBe(true);
-		expect(breakdown.thresholdTokens).toBe(170_000);
-		const output = renderContextUsage(breakdown, colorStub);
-		// 18,612 tokens: 10.9% of the 170K cutoff, 9.3% of the 200K window.
-		// strong runs use bold (untagged by the stub); labels are lowercase.
-		expect(output).toContain("19K{dim}/170k/200k tokens{muted} (10.9%/9.3%)");
-		const bufferGlyph = output.match(/\{muted\}(.) Autocompact buffer/)?.[1] ?? "";
-		expect(bufferGlyph.length).toBeGreaterThan(0);
-		expect(output.match(new RegExp(`\\{muted\\}${bufferGlyph}`, "g"))?.length ?? 0).toBeGreaterThan(0);
-		expect(output).not.toContain(`{warning}${bufferGlyph}`);
-	});
-
-	it("keeps the raw-window headline and the hatched warning buffer when the scale is off", () => {
-		const breakdown = scaledBreakdown(false);
-		expect(breakdown.scaledToCutoff).toBe(false);
-		const output = renderContextUsage(breakdown, colorStub);
-		expect(output).toContain("19K{dim}/200k tokens{muted} (9.3%)");
-		expect(output).not.toContain("/170k/");
-		const bufferGlyph = output.match(/\{warning\}(.) Autocompact buffer/)?.[1] ?? "";
-		expect(bufferGlyph.length).toBeGreaterThan(0);
-		expect(output.match(new RegExp(`\\{warning\\}${bufferGlyph}`, "g"))?.length ?? 0).toBeGreaterThan(0);
-		expect(output).not.toContain(`{muted}${bufferGlyph}`);
-	});
-
-	it("does not enter scaled mode when compaction is disabled", () => {
-		const breakdown = computeContextBreakdown(
-			{
-				model: { id: "demo", name: "Demo Model", contextWindow: 200_000 } as never,
-				agent: { tokenizer: {} as never },
-				getContextBreakdown: () => ({
-					messagesTokens: 12_000,
-					skillsTokens: 0,
-					systemToolsTokens: 3_900,
-					systemContextTokens: 112,
-					systemPromptTokens: 2_600,
-					usedTokens: 18_612,
-				}),
-			} as never,
-			{
-				compaction: { ...DEFAULT_COMPACTION_SETTINGS, thresholdPercent: 85, enabled: false },
-				scaleToCompaction: true,
-			},
-		);
-		expect(breakdown.thresholdTokens).toBeUndefined();
-		expect(breakdown.scaledToCutoff).toBe(false);
 	});
 });

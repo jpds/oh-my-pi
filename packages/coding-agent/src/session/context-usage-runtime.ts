@@ -16,7 +16,6 @@ import { resolveModelCompactionSettings } from "./model-compaction-threshold";
 import { resolveSpeculationLeadTokens } from "./speculation-lead";
 
 import { cfgSkillful } from "./settings";
-import { cfgTuiScaleGaugeToCompaction } from "../modes/settings";
 import { cfgSnapcompactShape, cfgSnapcompactSystemPrompt, cfgSnapcompactToolResults } from "./context-settings";
 
 /** Resolve session policy before handing pure boundary arithmetic to the UI. */
@@ -60,7 +59,6 @@ export function computeSessionContextBreakdown(
 		compaction: resolveModelCompactionSettings(session.settings, session.model),
 		sourceRevision: session.settings.revision,
 		skillful: cfgSkillful.get(session.settings),
-		scaleToCompaction: cfgTuiScaleGaugeToCompaction.get(session.settings),
 		snapcompact,
 	});
 }

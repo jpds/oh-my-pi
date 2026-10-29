@@ -11,7 +11,7 @@ import { sameItems, sameProps } from "../native/memo";
 import { plainLine, plainText } from "../native/spans";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import type { Component } from "../tui";
-import type { ThemeColor } from "../theme/schema";
+import { DECLARED_SETTING_COLOR } from "../theme/schema";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
 import { FormField, type FormFieldOptions, type FormFieldTheme, SelectFormField, TextFormField } from "./form";
@@ -109,12 +109,10 @@ function hasPrefsOption(component: Component): component is Component & PrefsOpt
 }
 
 /**
- * Theme token for rows whose value the machine's declarative settings layer declares: the counterpart
- * of the `statusLineGitDirty` hue that paints changed rows, so a declared value reads as the baseline
- * rather than as an edit the user made. Every bundled theme defines it in a saturated hue that no
- * theme reuses for `changed`, the muted tier, or plain text.
+ * Theme token for settings rows whose value the declarative layer declares. Defined beside
+ * {@link ThemeColor} so the theme adapters read it without importing this component.
  */
-export const DECLARED_SETTING_COLOR: ThemeColor = "statusLineGitClean";
+export { DECLARED_SETTING_COLOR };
 
 export interface SettingsListTheme {
 	label: (text: string, selected: boolean, changed: boolean) => string;
