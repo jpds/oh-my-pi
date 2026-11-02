@@ -4232,8 +4232,7 @@ export function vercelAiGatewayModelManagerOptions(
 				// Evaluation rows are the gateway's System One judge surface; chat
 				// rows without tool-use cannot serve an agent turn.
 				filterModel: (entry: OpenAICompatibleModelRecord) =>
-					entry.type === "evaluation" ||
-					(Array.isArray(entry.tags) && entry.tags.includes("tool-use")),
+					entry.type === "evaluation" || (Array.isArray(entry.tags) && entry.tags.includes("tool-use")),
 				mapModel: (
 					entry: OpenAICompatibleModelRecord,
 					defaults: ModelSpec<"anthropic-messages" | "typesafe">,
@@ -5777,7 +5776,9 @@ export function mapMunitoReferenceModel<TApi extends Api>(
 	}
 	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as ModelSpec<TApi> | undefined;
 	if (!canonical) {
-		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+		// Unbundled ids stay neutral: an explicit `reasoning: false` (not an
+		// absent flag) so the row never inherits a stale ladder.
+		return { ...defaults, reasoning: defaults.reasoning ?? false, name: toModelName(entry.name, defaults.name) };
 	}
 	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
 	const maxTokens =

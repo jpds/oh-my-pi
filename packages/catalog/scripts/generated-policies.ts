@@ -105,9 +105,7 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
 	const policy = resolveModelPolicy({ ...model, thinking: undefined });
 	if (policy.thinking) {
-		model.thinking = requiresProviderAuthoredEffort
-			? { ...policy.thinking, requiresEffort: true }
-			: policy.thinking;
+		model.thinking = requiresProviderAuthoredEffort ? { ...policy.thinking, requiresEffort: true } : policy.thinking;
 		// Mirror `buildModel`: an exact `thinking-efforts` rule upgrades a
 		// neutral discovery default, so the bundled row stays reasoning-capable.
 		model.reasoning = true;
