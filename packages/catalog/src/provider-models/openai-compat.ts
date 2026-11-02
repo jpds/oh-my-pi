@@ -4211,31 +4211,66 @@ function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { bas
 	};
 }
 
+// convaiinnovations/laya and laya-free are temporary promo models omitted from seeds
+// due to promo fragility (expiring 2026-10-31), but cached rows must drop on static mismatch.
+const VERCEL_AI_GATEWAY_STATIC_MODEL_IDS = [
+	...seedModels("vercel-ai-gateway").map(model => model.id),
+	"convaiinnovations/laya",
+	"convaiinnovations/laya-free",
+];
+
 export function vercelAiGatewayModelManagerOptions(
 	config?: VercelAiGatewayModelManagerConfig,
-): ModelManagerOptions<"anthropic-messages"> {
+): ModelManagerOptions<"anthropic-messages" | "typesafe"> {
 	const apiKey = config?.apiKey;
 	const { baseUrl, catalogBaseUrl } = normalizeVercelAiGatewayBaseUrls(config?.baseUrl);
-	return {
+	const options: ModelManagerOptions<"anthropic-messages" | "typesafe"> = {
 		providerId: "vercel-ai-gateway",
+		dropCachedModelIdsOnStaticMismatch: VERCEL_AI_GATEWAY_STATIC_MODEL_IDS,
 		fetchDynamicModels: () =>
-			fetchOpenAICompatibleModels({
+			fetchOpenAICompatibleModels<"anthropic-messages" | "typesafe">({
 				api: "anthropic-messages",
 				provider: "vercel-ai-gateway",
 				baseUrl: catalogBaseUrl,
 				apiKey,
 				retryWithoutApiKeyOnUnauthorized: true,
-				filterModel: (entry: OpenAICompatibleModelRecord) => {
-					const tags = entry.tags;
-					return Array.isArray(tags) && tags.includes("tool-use");
-				},
+				// Evaluation rows are the gateway's System One judge surface; chat
+				// rows without tool-use cannot serve an agent turn.
+				filterModel: (entry: OpenAICompatibleModelRecord) =>
+					entry.type === "evaluation" ||
+					(Array.isArray(entry.tags) && entry.tags.includes("tool-use")),
 				mapModel: (
 					entry: OpenAICompatibleModelRecord,
-					defaults: ModelSpec<"anthropic-messages">,
-					_context: OpenAICompatibleModelMapperContext<"anthropic-messages">,
-				): ModelSpec<"anthropic-messages"> => {
+					defaults: ModelSpec<"anthropic-messages" | "typesafe">,
+					_context: OpenAICompatibleModelMapperContext<"anthropic-messages" | "typesafe">,
+				): ModelSpec<"anthropic-messages" | "typesafe"> => {
 					const pricing = entry.pricing as Record<string, unknown> | undefined;
 					const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : [];
+					const cost = {
+						input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
+						output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
+						cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
+						cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
+					};
+
+					if (entry.type === "evaluation") {
+						const modalities = isRecord(entry.modalities) ? entry.modalities : undefined;
+						const inputModalities = Array.isArray(modalities?.input) ? modalities.input : [];
+						return {
+							...defaults,
+							api: "typesafe",
+							baseUrl,
+							kind: "judge",
+							reasoning: false,
+							input: inputModalities.includes("image") || tags.includes("vision") ? ["text", "image"] : ["text"],
+							supportsTools: false,
+							cost,
+							contextWindow:
+								typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
+							maxTokens: typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens,
+						};
+					}
+
 					const reportedMaxTokens = typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens;
 					const modelId = typeof entry.id === "string" ? entry.id : defaults.id;
 					const maxTokens =
@@ -4248,12 +4283,7 @@ export function vercelAiGatewayModelManagerOptions(
 						baseUrl,
 						reasoning: Array.isArray(entry.tags) ? tags.includes("reasoning") : defaults.reasoning,
 						input: tags.includes("vision") ? ["text", "image"] : ["text"],
-						cost: {
-							input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
-							output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
-							cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
-							cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
-						},
+						cost,
 						contextWindow:
 							typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
 						maxTokens,
@@ -4262,6 +4292,36 @@ export function vercelAiGatewayModelManagerOptions(
 				fetch: config?.fetch,
 			}),
 	};
+	const fetchDiscovered = options.fetchDynamicModels;
+	if (!fetchDiscovered) return options;
+	return {
+		...options,
+		fetchDynamicModels: async () => {
+			// Discovery rows already carry `baseUrl` from mapModel; appended seed
+			// rows are rebased by `appendVercelGatewaySeeds` so a proxied
+			// consumer never sends its credential to the public gateway.
+			return appendVercelGatewaySeeds(await fetchDiscovered(), baseUrl);
+		},
+	};
+}
+
+/**
+ * Append every authored seed row discovery did not return and rebase it onto
+ * `baseUrl`: Vercel's judge seeds are the provider's live System One surface,
+ * so a proxied consumer must reach them through its own host instead of the
+ * public gateway the seed's catalog base names. Empty discovery stays empty —
+ * a transient outage must keep the cache non-authoritative, not seed it.
+ */
+function appendVercelGatewaySeeds<TApi extends Api>(
+	discovered: readonly ModelSpec<TApi>[] | null,
+	baseUrl: string,
+): readonly ModelSpec<TApi>[] | null {
+	if (discovered === null || discovered.length === 0) return discovered;
+	const foundIds = new Set(discovered.map(model => model.id));
+	const appended = seedModels<TApi>("vercel-ai-gateway")
+		.filter(seed => !foundIds.has(seed.id))
+		.map(seed => ({ ...seed, baseUrl, ...(seed.api === "typesafe" ? { kind: "judge" as const } : {}) }));
+	return appended.length === 0 ? discovered : [...discovered, ...appended];
 }
 
 // ---------------------------------------------------------------------------
