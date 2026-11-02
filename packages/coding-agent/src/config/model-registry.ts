@@ -14,6 +14,7 @@ import { serviceTierOffersByAccount } from "@oh-my-pi/pi-ai/types";
 import type {
 	Api,
 	Context,
+	JudgmentConfig,
 	Model,
 	ModelSpec,
 	RemoteCompactionConfig,
@@ -133,6 +134,8 @@ import {
 	mergeByModelKey,
 	mergeCompat,
 	mergeDiscoveredModel,
+	mergeJudgmentConfig,
+	mergeProviderJudgmentConfig,
 	mergeProviderRemoteCompactionConfig,
 	mergeRemoteCompactionConfig,
 	resolveProviderBaseUrl,
@@ -2261,10 +2264,7 @@ export class ModelRegistry {
 	#resolveStartupModelCacheProviderId(providerId: string): string {
 		const gateway = this.#piNativeGateway(providerId);
 		if (gateway) return resolvePiNativeModelCacheProviderId(providerId, gateway);
-		const baseUrl =
-			this.#runtimeProviderOverrides.get(providerId)?.baseUrl ??
-			this.#providerOverrides.get(providerId)?.baseUrl ??
-			(this.#hasFullSnapshot ? this.getProviderBaseUrl(providerId) : undefined);
+		const baseUrl = this.#descriptorBaseUrl(providerId);
 		return resolveModelCacheProviderId(providerId, { baseUrl });
 	}
 
@@ -2587,28 +2587,30 @@ export class ModelRegistry {
 					)
 				: models;
 
-		const withRemoteCompaction = providerConfig.remoteCompaction
-			? withDecoderMetadata.map(model =>
-					buildModel({
-						...model,
-						remoteCompaction: mergeProviderRemoteCompactionConfig(
-							model.remoteCompaction,
-							providerConfig.remoteCompaction,
-						),
-						compat: model.compatConfig,
-					} as ModelSpec<Api>),
-				)
-			: withDecoderMetadata;
+		const withProviderDefaults =
+			providerConfig.remoteCompaction || providerConfig.judgment
+				? withDecoderMetadata.map(model =>
+						buildModel({
+							...model,
+							remoteCompaction: mergeProviderRemoteCompactionConfig(
+								model.remoteCompaction,
+								providerConfig.remoteCompaction,
+							),
+							judgment: mergeProviderJudgmentConfig(model.judgment, providerConfig.judgment),
+							compat: model.compatConfig,
+						} as ModelSpec<Api>),
+					)
+				: withDecoderMetadata;
 
 		// User config plumbing, not catalog policy: an ollama provider configured
 		// for Responses moves its completions-discovered rows onto that API.
 		// KDL `api-routes` key on model ids and cannot see the provider config.
 		if (providerConfig.provider !== "ollama" || providerConfig.api !== "openai-responses") {
-			return withRemoteCompaction;
+			return withProviderDefaults;
 		}
 
 		const contextLengthOverride = getOllamaContextLengthOverride();
-		return withRemoteCompaction.map(model => {
+		return withProviderDefaults.map(model => {
 			const normalized =
 				model.api === "openai-completions"
 					? buildModel({
@@ -2787,6 +2789,7 @@ export class ModelRegistry {
 				providerConfig.guardrailIdentifier ||
 				providerConfig.requestMetadata ||
 				providerConfig.remoteCompaction ||
+				providerConfig.judgment ||
 				providerConfig.transport
 			) {
 				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
@@ -2804,6 +2807,7 @@ export class ModelRegistry {
 					authHeader: providerConfig.authHeader,
 					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
 					remoteCompaction: providerConfig.remoteCompaction,
+					judgment: providerConfig.judgment,
 					transport: providerConfig.transport,
 					guardrailIdentifier: providerConfig.guardrailIdentifier,
 					guardrailVersion: providerConfig.guardrailVersion,
@@ -2829,6 +2833,7 @@ export class ModelRegistry {
 					headers: providerConfig.headers,
 					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
 					remoteCompaction: providerConfig.remoteCompaction,
+					judgment: providerConfig.judgment,
 					discovery: providerConfig.discovery,
 					optional: false,
 				});
@@ -3856,6 +3861,7 @@ export class ModelRegistry {
 				override.headers || baseOverride?.headers ? { ...baseOverride?.headers, ...override.headers } : undefined,
 			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
 			remoteCompaction: mergeRemoteCompactionConfig(baseOverride?.remoteCompaction, override.remoteCompaction),
+			judgment: mergeJudgmentConfig(baseOverride?.judgment, override.judgment),
 			transport: override.transport ?? baseOverride?.transport,
 		};
 	}
@@ -3866,12 +3872,13 @@ export class ModelRegistry {
 			headers?: Record<string, string>;
 			resolveHeaders?: Model<Api>["resolveHeaders"];
 			remoteCompaction?: RemoteCompactionConfig<Api>;
+			judgment?: JudgmentConfig;
 		},
 	>(
 		entry: T,
 		override: Pick<
 			ProviderOverride,
-			"baseUrl" | "baseUrlApis" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "transport"
+			"baseUrl" | "baseUrlApis" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "judgment" | "transport"
 		>,
 	): T {
 		const changesHeaders =
@@ -3894,13 +3901,14 @@ export class ModelRegistry {
 			// providers without a `transport` field keep the default per-API dispatch.
 			...(override.transport !== undefined ? { transport: override.transport } : {}),
 			remoteCompaction: mergeProviderRemoteCompactionConfig(entry.remoteCompaction, override.remoteCompaction),
+			judgment: mergeProviderJudgmentConfig(entry.judgment, override.judgment),
 		};
 	}
 	#applyProviderTransportOverrideToModel(
 		model: Model<Api>,
 		override: Pick<
 			ProviderOverride,
-			"baseUrl" | "baseUrlApis" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "transport"
+			"baseUrl" | "baseUrlApis" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "judgment" | "transport"
 		>,
 	): Model<Api> {
 		// Every projection rebuilds the rows of runtime-overridden providers; an
@@ -4251,6 +4259,7 @@ export class ModelRegistry {
 					providerCompat,
 					(providerConfig.auth as ProviderAuthMode | undefined) ?? undefined,
 					providerConfig.remoteCompaction,
+					providerConfig.judgment,
 					modelDef as CustomModelDefinitionLike,
 				);
 				if (!model) continue;
@@ -5027,6 +5036,7 @@ export class ModelRegistry {
 					config.compat,
 					undefined,
 					config.remoteCompaction,
+					config.judgment,
 					modelDef as CustomModelDefinitionLike,
 				);
 				if (!overlay) {
@@ -5127,6 +5137,7 @@ export class ModelRegistry {
 							providerCompat,
 							undefined,
 							config.remoteCompaction,
+							config.judgment,
 							modelDef as CustomModelDefinitionLike,
 						);
 						if (!overlay) continue;
@@ -5156,6 +5167,7 @@ export class ModelRegistry {
 			config.apiKey ||
 			config.authHeader !== undefined ||
 			config.remoteCompaction !== undefined ||
+			config.judgment !== undefined ||
 			config.transport !== undefined
 		) {
 			const transportOverride = {
@@ -5164,6 +5176,7 @@ export class ModelRegistry {
 				apiKey: config.apiKey,
 				authHeader: config.authHeader,
 				remoteCompaction: config.remoteCompaction,
+				judgment: config.judgment,
 				transport: config.transport,
 			};
 			const nextRuntimeOverride = this.#mergeProviderOverride(
@@ -5369,6 +5382,7 @@ export interface ProviderConfigInput {
 	headers?: Record<string, string>;
 	compat?: ModelSpec<Api>["compat"];
 	remoteCompaction?: RemoteCompactionConfig<Api>;
+	judgment?: JudgmentConfig;
 	authHeader?: boolean;
 	/** Streaming transport override — see {@link Model.transport}. */
 	transport?: Model<Api>["transport"];
@@ -5434,6 +5448,7 @@ export interface ProviderConfigInput {
 		contextPromotionTarget?: string;
 		compactionModel?: string;
 		remoteCompaction?: RemoteCompactionConfig<Api>;
+		judgment?: JudgmentConfig;
 		premiumMultiplier?: number;
 	}>;
 }

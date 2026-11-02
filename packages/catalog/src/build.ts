@@ -25,6 +25,8 @@ import {
 	type Api,
 	type EffectiveTokenCost,
 	MODEL_KINDS,
+	type JudgmentConfig,
+	type JudgmentUsageMap,
 	type Model,
 	type ModelAccountAccess,
 	type ModelCost,
@@ -47,6 +49,54 @@ function isInputModalities(value: unknown): value is ("text" | "image")[] {
 	return Array.isArray(value) && value.every(entry => entry === "text" || entry === "image");
 }
 
+/** Narrow an unknown compiled-axis payload to a string→string record. */
+function stringRecord(value: unknown): Record<string, string> | undefined {
+	const payload = objectPayload(value);
+	if (payload === undefined) return undefined;
+	const record: Record<string, string> = {};
+	for (const [key, entry] of Object.entries(payload)) {
+		// Per-entry skip: one non-string entry must not drop the good ones.
+		if (typeof entry !== "string" || entry === "") continue;
+		record[key] = entry;
+	}
+	return Object.keys(record).length > 0 ? record : undefined;
+}
+
+/**
+ * Narrow a compiled `judgment` axis value to a JudgmentConfig. Unknown keys
+ * are ignored; `undefined` (absent, non-object, or no recognized field)
+ * makes the caller drop inherited policy when the spec does not explicitly
+ * set judgment, so stale policy cannot survive an api-switched rebuild.
+ */
+function judgmentConfig(value: unknown): JudgmentConfig | undefined {
+	const payload = objectPayload(value);
+	if (payload === undefined) return undefined;
+	const config: JudgmentConfig = {};
+	const route = Reflect.get(payload, "route");
+	if (typeof route === "string") {
+		// Gen-time failure, not a silent drop: a bad route would leave the
+		// spec value to win unexpectedly.
+		if (!route.startsWith("/")) throw new Error(`judgment.route must start with "/": ${JSON.stringify(route)}`);
+		config.route = route;
+	}
+	const typeField = Reflect.get(payload, "typeField");
+	if (typeof typeField === "string" && typeField !== "") config.typeField = typeField;
+	const typeMap = stringRecord(Reflect.get(payload, "typeMap"));
+	if (typeMap !== undefined) config.typeMap = typeMap;
+	const valueMap = stringRecord(Reflect.get(payload, "valueMap"));
+	if (valueMap !== undefined) config.valueMap = valueMap;
+	const usagePayload = objectPayload(Reflect.get(payload, "usageMap"));
+	if (usagePayload !== undefined) {
+		const usage: JudgmentUsageMap = {};
+		for (const key of ["input", "output", "cost"] as const) {
+			const entry = Reflect.get(usagePayload, key);
+			if (typeof entry === "string" && entry !== "") usage[key] = entry;
+		}
+		if (Object.keys(usage).length > 0) config.usageMap = usage;
+	}
+	return Object.keys(config).length > 0 ? config : undefined;
+}
+
 /**
  * Applies resolved catalog-data axes onto the model: reviewed metadata
  * corrections (`cost-patch`, `limits-patch`, `long-context-cost`,
@@ -56,9 +106,28 @@ function isInputModalities(value: unknown): value is ("text" | "image")[] {
  * `supports-assistant-prefill`) is rule-owned; `context-promotion-target` fills
  * only when the spec left it unset.
  */
-function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: Record<string, unknown>): void {
+function applyCatalogAssignments<TApi extends Api>(
+	model: Model<TApi>,
+	catalog: Record<string, unknown>,
+	specHasJudgment = false,
+): void {
 	const kind = MODEL_KINDS.find(value => value === catalog.kind);
 	if (kind !== undefined) model.kind = kind;
+	// Catalog judgment wire facts are the baseline; spec values (discovery and
+	// user modelOverrides, merged before this rebuild) win key-wise.
+	const judgment = judgmentConfig(catalog.judgment);
+	if (judgment !== undefined) {
+		const prior = model.judgment;
+		model.judgment = {
+			...judgment,
+			...prior,
+			...((judgment.typeMap ?? prior?.typeMap) ? { typeMap: { ...judgment.typeMap, ...prior?.typeMap } } : {}),
+			...((judgment.valueMap ?? prior?.valueMap) ? { valueMap: { ...judgment.valueMap, ...prior?.valueMap } } : {}),
+			...((judgment.usageMap ?? prior?.usageMap) ? { usageMap: { ...judgment.usageMap, ...prior?.usageMap } } : {}),
+		};
+	} else if (!specHasJudgment) {
+		delete model.judgment;
+	}
 	if (catalog.contextWindowAuthoritative === true) {
 		model.contextWindowAuthoritative = true;
 	} else {
@@ -521,7 +590,8 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 	const model: Model<TApi> = {
 		...spec,
 		// Missing evidence may produce a provisional ladder; reviewed neutral
-		// upgrades may repair stale capability data.
+		// upgrades may repair stale capability data: `thinking-upgrade-neutral`
+		// promotes a ladder-free lane, and unclassified specs carry an unverified ladder.
 		reasoning: spec.reasoning === true || policy.thinking !== undefined,
 		name: cleanModelName(spec.name),
 		identity: policy.identity,
@@ -533,7 +603,7 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 		compat: policy.compat,
 		compatConfig: spec.compat,
 	};
-	applyCatalogAssignments(model, policy.catalog);
+	applyCatalogAssignments(model, policy.catalog, Object.hasOwn(spec, "judgment") && spec.judgment !== undefined);
 	applyCatalogCorrections(model, policy.catalog);
 	capAntigravityWireProfiles(model, policy.catalog.maxTokensCeiling);
 	// Configured kinds and lifetimes replace catalog values rather than merging with them.
