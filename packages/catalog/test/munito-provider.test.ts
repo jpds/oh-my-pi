@@ -245,31 +245,6 @@ describe("Munito provider support", () => {
 		expect(isMunitoChatModelId("   ")).toBe(false);
 	});
 
-	test("a neutral Gemma discovery row is repaired to always-on reasoning with no ladder", () => {
-		// Discovery reports no capabilities for Gemma; the exact
-		// `thinking-upgrade-neutral` correction must repair the
-		// `reasoning: false` default without inventing a ladder.
-		const spec: ModelSpec<"openai-completions"> = {
-			id: "google/gemma-4-12b",
-			name: "gemma-4-12b",
-			api: "openai-completions",
-			provider: "munito",
-			baseUrl: "https://api.munito.ai/inference/v1",
-			reasoning: false,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: null,
-			maxTokens: null,
-		};
-		const gemma = buildModel(spec);
-		expect(gemma.reasoning).toBe(true);
-		expect(gemma.thinking).toBeUndefined();
-		expect(gemma.compat.supportsReasoningEffort).toBe(false);
-		// The repair must not leak to a lane whose contract did not opt in.
-		const other: ModelSpec<"openai-completions"> = { ...spec, id: "nutshell/test-chat-1" };
-		expect(buildModel(other).reasoning).toBe(false);
-	});
-
 	test("the wire dialect is openai reasoning_effort, with the rejected lanes ladder-free", () => {
 		const spec = (id: string): ModelSpec<"openai-completions"> => ({
 			id,

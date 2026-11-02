@@ -57,14 +57,6 @@ provider "munito" {
 		thinking-efforts
 		supports-reasoning-effort #false
 	}
-	// Gemma 4 12B reasons at the template default (no non-reasoning mode) and
-	// has no canonical reference to supply `reasoning`; the exact selector opens
-	// the thinking gate so the neutral spec materializes reasoning-capable with
-	// no ladder.
-	models "google/gemma-4-12b" {
-		thinking-upgrade-neutral #true
-	}
-
 	// Decision lanes: OpenRouter catalogs the decider as `kind: "judge"` without
 	// native tools, and Cygnet is a one-token readout over frozen Gemma-4-12B-it.
 	// A chat kind would offer them agent turns and native tool calls. These ids
