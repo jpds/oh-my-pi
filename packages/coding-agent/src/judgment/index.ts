@@ -54,6 +54,7 @@ import { isEmbeddedImageContent } from "@oh-my-pi/pi-ai/images/shared";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import type { JudgmentImageInput } from "@oh-my-pi/pi-catalog/compat/judgment-images";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import type { JudgmentConfig } from "@oh-my-pi/pi-catalog/types";
 import { logger, prompt, USER_AGENT, untilAborted } from "@oh-my-pi/pi-utils";
 import { normalizeModelContextImages } from "../utils/image-loading";
 import { type FittedImage, fitImage } from "../utils/image-resize";
@@ -468,6 +469,8 @@ export interface NativeJudgeDescriptor {
 	baseUrl: string;
 	apiKey: string;
 	headers?: Record<string, string>;
+	/** Per-model System One overrides (route, discriminator and key maps). */
+	judgment?: JudgmentConfig;
 }
 
 /**
@@ -497,12 +500,13 @@ export async function resolveNativeJudgeDescriptor(deps: {
 	const headers = { "User-Agent": USER_AGENT, ...modelHeaders };
 	return {
 		api: model.api,
-		route: TYPESAFE_JUDGMENT_ROUTE,
+		route: model.judgment?.route ?? TYPESAFE_JUDGMENT_ROUTE,
 		provider: model.provider,
 		model: model.id,
 		baseUrl: model.baseUrl.replace(/\/+$/, ""),
 		apiKey,
 		headers,
+		...(model.judgment ? { judgment: model.judgment } : {}),
 	};
 }
 

@@ -994,13 +994,27 @@ if "__omp_prelude_loaded__" not in globals():
             return {"type": "score", "instructions": instructions, "criteria": levels}
         raise _judge_invalid(f'question "{id}" type must be "choice", "bool", or "score"')
 
-    def _judge_wire_questions(questions) -> dict:
+    def _judge_wire_questions(questions, judgment=None) -> dict:
         if not isinstance(questions, dict):
             raise _judge_invalid("questions must be an object keyed by id")
         wire = {id: _judge_wire_question(id, value) for id, value in questions.items()}
         if not wire:
             raise _judge_invalid("questions must contain at least one question")
-        return wire
+        if not judgment:
+            return wire
+        type_field = judgment.get("typeField") or "type"
+        type_map = judgment.get("typeMap") or {}
+        if type_field == "type" and not type_map:
+            return wire
+        mapped = {}
+        for id, question in wire.items():
+            rewritten = dict(question)
+            canonical = rewritten.get("type")
+            if type_field != "type":
+                rewritten.pop("type", None)
+            rewritten[type_field] = type_map.get(canonical, canonical)
+            mapped[id] = rewritten
+        return mapped
 
     def _judge_retry_after_s(headers) -> float | None:
         value = headers.get("Retry-After") if headers is not None else None
@@ -1048,17 +1062,37 @@ if "__omp_prelude_loaded__" not in globals():
                 time.sleep(_judge_backoff_s(attempt, None))
         raise RuntimeError("unreachable")
 
+    _JUDGE_CANONICAL_ANSWER_KEYS = ("choice", "noul", "score")
+
     def _judge_shape_answers(descriptor: dict, wire_questions: dict, response) -> tuple[dict, str]:
         if not isinstance(response, dict) or not isinstance(response.get("answers"), dict):
             raise RuntimeError("judge transport returned an invalid response (missing answers)")
+        judgment = descriptor.get("judgment") or {}
+        type_field = judgment.get("typeField") or "type"
+        value_map = judgment.get("valueMap") or {}
         answers = {}
         for id, question in wire_questions.items():
             answer = response["answers"].get(id)
-            if not isinstance(answer, dict) or answer.get("type") != question["type"]:
-                raise RuntimeError(
-                    f"judge response is missing a \"{question['type']}\" answer for question \"{id}\""
-                )
-            answers[id] = {"type": "bool", "bool": answer.get("noul")} if answer["type"] == "noul" else answer
+            expected = question[type_field]
+            if not isinstance(answer, dict) or answer.get(type_field) != expected:
+                raise RuntimeError(f"judge response is missing a \"{expected}\" answer for question \"{id}\"")
+            canonical = expected
+            for key, wire_type in (judgment.get("typeMap") or {}).items():
+                if wire_type == expected:
+                    canonical = key
+                    break
+            normalized = dict(answer)
+            normalized["type"] = canonical
+            if type_field != "type":
+                normalized.pop(type_field, None)
+            for canonical_key in _JUDGE_CANONICAL_ANSWER_KEYS:
+                wire_key = value_map.get(canonical_key)
+                if wire_key is None:
+                    continue
+                if canonical_key not in normalized and wire_key in normalized:
+                    normalized[canonical_key] = normalized[wire_key]
+                    del normalized[wire_key]
+            answers[id] = {"type": "bool", "bool": normalized.get("noul")} if canonical == "noul" else normalized
         model = response.get("model") or descriptor.get("model")
         return answers, f"{descriptor.get('provider', 'typesafe')}/{model}"
 
@@ -1311,7 +1345,7 @@ if "__omp_prelude_loaded__" not in globals():
         # image judgments still go through the host bridge.
         descriptor = _judge_direct_descriptor()
         if descriptor is not None and images is None:
-            wire_questions = _judge_wire_questions(questions)
+            wire_questions = _judge_wire_questions(questions, descriptor.get("judgment"))
             _judge_check_state(state)
             answers, _model = await _omp_asyncio.to_thread(_judge_once, descriptor, state, wire_questions)
             return answers
@@ -1445,7 +1479,7 @@ if "__omp_prelude_loaded__" not in globals():
         # Same image constraint as judge(): the direct path cannot carry them.
         descriptor = _judge_direct_descriptor()
         if descriptor is not None and images is None:
-            wire_questions = _judge_wire_questions(questions)
+            wire_questions = _judge_wire_questions(questions, descriptor.get("judgment"))
             run = _start_local_batch(descriptor, items, wire_questions, concurrency, retries, min_ok, intent)
             return JudgmentBatch(run, run.total, run._intent)
         args = {"op": "create", "items": items, "questions": questions}
