@@ -322,6 +322,68 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		}
 	});
 
+	it("applies the model's judgment maps to the direct wire and answers", async () => {
+		const requests: { url: string; body: unknown }[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async request => {
+				requests.push({ url: new URL(request.url).pathname, body: await request.json() });
+				return Response.json({
+					model: "typesafe-ai/jev",
+					answers: { ok: { type: "boolean", probability: 0.75 } },
+					usage: { inputTokens: 4, outputTokens: 2 },
+				});
+			},
+		});
+
+		try {
+			const withMaps = JSON.stringify({
+				api: "typesafe",
+				route: "/v1/evaluate",
+				provider: "vercel-ai-gateway",
+				model: "typesafe-ai/jev",
+				baseUrl: server.url.toString(),
+				apiKey: "gw-key",
+				judgment: {
+					route: "/v1/evaluate",
+					typeMap: { noul: "boolean" },
+					valueMap: { noul: "probability" },
+					usageMap: { input: "inputTokens", output: "outputTokens" },
+				},
+			});
+			const result = await runPrelude(
+				[
+					"async def main():",
+					'    answers = await judge("hello", {',
+					'        "ok": {"type": "bool", "instructions": "fake?", "criteria": {"true": "yes", "false": "no"}},',
+					"    })",
+					"    print(json.dumps(answers, sort_keys=True))",
+					"asyncio.run(main())",
+				].join("\n"),
+				{ PI_JUDGE_DIRECT: withMaps },
+			);
+
+			expect(result.stderr).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout.trim())).toEqual({ ok: { type: "bool", bool: 0.75 } });
+			expect(requests).toEqual([
+				{
+					url: "/v1/evaluate",
+					body: {
+						state: "hello",
+						model: "typesafe-ai/jev",
+						questions: {
+							ok: { type: "boolean", instructions: "fake?", criteria: { true: "yes", false: "no" } },
+						},
+					},
+				},
+			]);
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	it("judge_batch() runs kernel-local with per-item retry, drain cursor, and attach", async () => {
 		const attempts: string[] = [];
 		const server = Bun.serve({
