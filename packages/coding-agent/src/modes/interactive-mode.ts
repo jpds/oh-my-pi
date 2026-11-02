@@ -186,6 +186,7 @@ import {
 	FEED_MODEL_BADGE_WIDTH,
 	formatFeedModelBadge,
 	formatMoreItems,
+	formatStatusIcon,
 	isFeedModelBadgeEnabled,
 	previewLine,
 	replaceTabs,
@@ -361,13 +362,16 @@ import type {
 	ShowStatusOptions,
 	SelectOnlyModelSelectorOptions,
 	SubmittedUserInput,
+	YieldCompaction,
 } from "./types";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { ConversationPosition } from "./utils/conversation-position";
 import { materializeImageChipLinks, UiHelpers } from "./utils/ui-helpers";
 
 import {
 	askTimeoutMs,
 	cfgAutocompleteMaxVisible,
+	cfgComposerPredictionAlternatives,
 	cfgComposerPredictions,
 	cfgComposerShape,
 	cfgComposerTokenRate,
@@ -469,6 +473,7 @@ const cfgLiveUiSettings = combine({
 	"recap.enabled": cfgRecapEnabled,
 	"recap.idleSeconds": cfgRecapIdleSeconds,
 	"composer.predictions": cfgComposerPredictions,
+	"composer.predictionAlternatives": cfgComposerPredictionAlternatives,
 	"compaction.enabled": cfgCompactionEnabled,
 	"compaction.methodOrder": cfgCompactionMethodOrder,
 	"display.hideToolActivity": cfgDisplayHideToolActivity,
@@ -1185,10 +1190,7 @@ function renderSubagentToolPreview(session: ObservableSession, width: number): s
 	const elapsedWidth = visibleWidth(elapsedLabel);
 	const hook = `${theme.fg("dim", theme.tree.hook)} `;
 	// Between calls the row keeps the last call, marked with how it ended.
-	const status =
-		!currentTool && recent
-			? `${theme.styledSymbol(recent.isError ? "status.error" : "status.success", recent.isError ? "error" : "success")} `
-			: "";
+	const status = !currentTool && recent ? `${formatStatusIcon(recent.isError ? "error" : "success", theme)} ` : "";
 	const prefixWidth = visibleWidth(hook) + visibleWidth(status);
 	// Reserve the elapsed marker first, then cap the tool name; the detail gets whatever is left.
 	const shortTool = truncateToWidth(replaceTabs(tool), Math.max(0, width - prefixWidth - elapsedWidth), "");
@@ -1227,7 +1229,7 @@ export function renderSubagentHudLines(
 	// rows budgeted to the full terminal width would wrap.
 	const contentColumns = Math.max(0, columns - getPaddingX(1) * 2);
 	const layout = layoutPinnedHud(running.length, expanded);
-	const dot = theme.styledSymbol("status.done", "accent");
+	const dot = formatStatusIcon("running", theme);
 	const items = running.slice(0, layout.itemRows);
 	const showModelBadge = isFeedModelBadgeEnabled();
 	const outerIndent = " ";
@@ -1346,6 +1348,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly composer: Composer;
 	ui: TUI;
 	chatContainer: TranscriptContainer;
+	/** `!`/`$` runs started while the agent streams; {@link flushPendingBashComponents} moves them into the transcript. */
+	pendingShellContainer: Container;
 	pendingMessagesContainer: Container;
 	/** Judge-batch and automatic-download progress rows above the working line. */
 	progressHudContainer: Container;
@@ -1466,6 +1470,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	proseOnlyThinking = true;
 	expandThinkingBlocks = false;
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
+	yieldCompaction: YieldCompaction | undefined = undefined;
+	compactionQueueOrigin: ConversationPosition | undefined = undefined;
 	pendingTools = new Map<string, ToolExecutionHandle>();
 	transcriptMessageComponents = new WeakMap<AgentMessage, Component>();
 	pendingBashComponents: BashExecutionComponent[] = [];
@@ -1927,7 +1933,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.composer.setHoveredClickId(id);
 	}
 
-	clearTransientSessionUi(): void {
+	clearTransientSessionUi(options?: { viewOnly?: boolean }): void {
 		this.#hideSessionInfo();
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -1942,6 +1948,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.retryLoader = undefined;
 		}
 		this.statusContainer.disposeChildren();
+		this.pendingShellContainer.disposeChildren();
 		this.pendingMessagesContainer.disposeChildren();
 		this.#clearJudgmentBatchProgress();
 		this.#cancelModelCycleClearTimer();
@@ -1950,7 +1957,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingCommandOutput = [];
 		this.#pendingCommandOutputSessionId = undefined;
 		this.#pendingCommandOutputCommands = 0;
-		this.compactionQueuedMessages = [];
+		// A view switch leaves the main session, and the input queued for it, in place. A session reset
+		// hands a queued `/compact` and the input in the compaction queue back to the editor.
+		if (!options?.viewOnly) this.#inputController.restoreCompactionQueueToEditor();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.lastAssistantUsage = undefined;
@@ -2034,7 +2043,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor = this.composer.editor;
 		this.editor.magicKeywordsEnabled = () => cfgMagicKeywordsEnabled.get(this.settings);
 		this.editor.placeholder = () => this.#composerHint();
-		this.editor.prediction = () => this.#eventController.composerPrediction.text;
+		this.editor.predictions = () => this.#eventController.composerPrediction.choices;
+		this.editor.onPredictionAccepted = index => this.#eventController.composerPrediction.accepted(index);
+		this.editor.onPredictionShown = () => this.#eventController.composerPrediction.shown();
 		this.editor.composerState = () => this.#composerNativeState();
 		this.editor.onToggleDictation = () => void this.#toggleComposerDictation();
 		this.editor.imageReferenceHyperlink = imageReferenceHyperlink;
@@ -2119,6 +2130,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			}),
 		);
 		this.chatContainer = new TranscriptContainer();
+		this.pendingShellContainer = new AnchoredLiveContainer();
 		this.pendingMessagesContainer = new AnchoredLiveContainer();
 		this.progressHudContainer = new AnchoredLiveContainer();
 		this.progressHudContainer.addChild(this.#judgmentBatchProgressHud);
@@ -2460,6 +2472,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.composer.setRuntimeChildren(
 			[
 				this.chatContainer,
+				this.pendingShellContainer,
 				this.pendingMessagesContainer,
 				this.todoContainer,
 				this.subagentContainer,
@@ -2495,6 +2508,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.editorContainer,
 					this.attachmentChipsContainer,
 					this.reportContainer,
+					this.pendingShellContainer,
 					this.pendingMessagesContainer,
 					this.btwContainer,
 					this.omfgContainer,
@@ -2528,6 +2542,9 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.editorContainer,
 					this.hookWidgetContainerBelow,
 				],
+				// Deferred shell runs are transcript output: natively they flow at its
+				// end, where they stay when they move in, not pinned over the composer.
+				nativeTail: [this.pendingShellContainer],
 			},
 		);
 		this.ui.setFocus(this.editor);
@@ -3999,6 +4016,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#stopLoadingAnimation(true);
 		}
 		this.rebuildChatFromMessages();
+		// A /btw inject keeps its own retry (its key re-arms and it reports the reason); handing it
+		// to the editor as well would offer a second way to send it.
+		if (this.#btwController.reclaimDroppedPrompt(prompt)) {
+			this.ui.requestRender();
+			return;
+		}
 		// The rebuild drops transient notices, including the one that refused this prompt.
 		if (prompt.reason) this.showError(prompt.reason);
 		// The drop arrives asynchronously (after the abort settles); never clobber
@@ -4142,8 +4165,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#renderSubagentList();
 			this.ui.requestRender();
 		}
-		if (any("composer.predictions") && !next["composer.predictions"]) {
-			this.#eventController.composerPrediction.cancel();
+		const composerPrediction = this.#eventController.composerPrediction;
+		if (
+			(any("composer.predictions") && !next["composer.predictions"]) ||
+			// Alternatives already offered would keep their list until the next turn.
+			(any("composer.predictionAlternatives") &&
+				!next["composer.predictionAlternatives"] &&
+				(composerPrediction.choices?.length ?? 0) > 1)
+		) {
+			composerPrediction.cancel();
 		}
 		if (any("compaction.enabled", "compaction.methodOrder")) {
 			this.statusLine.setAutoCompactEnabled(this.session.autoCompactionEnabled);
@@ -8194,7 +8224,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		nextEditor.viewportRowsProvider = () => this.ui.terminal.rows;
 		nextEditor.magicKeywordsEnabled = () => cfgMagicKeywordsEnabled.get(this.settings);
 		nextEditor.placeholder = () => this.#composerHint();
-		nextEditor.prediction = () => this.#eventController.composerPrediction.text;
+		nextEditor.predictions = () => this.#eventController.composerPrediction.choices;
+		nextEditor.onPredictionAccepted = index => this.#eventController.composerPrediction.accepted(index);
+		nextEditor.onPredictionShown = () => this.#eventController.composerPrediction.shown();
 		nextEditor.composerState = () => this.#composerNativeState();
 		nextEditor.onToggleDictation = () => void this.#toggleComposerDictation();
 		nextEditor.attachmentChips = previousEditor.attachmentChips;
@@ -8649,6 +8681,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#uiHelpers.flushCompactionQueue(options);
 	}
 
+	runYieldCompaction(): void {
+		if (!this.yieldCompaction) return;
+		// Not awaited by callers: the compaction outlives the event dispatch or submission that starts it.
+		void this.#commandController.runYieldCompaction().catch(error => {
+			logger.warn("Queued compaction failed", { error: String(error) });
+		});
+	}
+
 	flushPendingBashComponents(): void {
 		this.#uiHelpers.flushPendingBashComponents();
 	}
@@ -8694,6 +8734,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#applyExtensionLinks();
 		await this.#uiHelpers.renderInitialMessages(options);
 		this.syncRetryHintRow();
+		// A switch or tree move that replays the transcript strands a `/compact` queued for the old position.
+		this.#inputController.releaseStaleYieldCompaction();
 	}
 	/**
 	 * Reconcile the idle "F5 to Retry" status row with the transcript tail:
@@ -9234,6 +9276,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController.handleDequeue();
 	}
 
+	restoreCompactionQueueToEditor(status?: string): void {
+		this.#inputController.restoreCompactionQueueToEditor(status);
+	}
+
+	waitForSubmissionDispatches(): Promise<void> {
+		return this.#inputController.waitForSubmissionDispatches();
+	}
+
 	handleImagePaste(): Promise<boolean> {
 		return this.#inputController.handleImagePaste();
 	}
@@ -9297,6 +9347,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleBtwFollowUpKey(): boolean {
 		return this.#btwController.handleFollowUp();
+	}
+
+	handleBtwInjectKey(): boolean {
+		return this.#btwController.handleInject();
 	}
 
 	async handleBtwBranch(

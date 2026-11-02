@@ -30,6 +30,8 @@ export interface PyToolBridgeEntry {
 	shieldedSignal?: AbortSignal;
 	shadowCell?: EvalShadowCellSession;
 	emitStatus?: (event: JsStatusEvent) => void;
+	/** Shows the user `out://` replies of bridged calls (`ToolBridgeOptions.onReply`). */
+	onReply?: (text: string) => void;
 	abortRequested?: () => boolean;
 }
 
@@ -132,6 +134,7 @@ export async function callSessionToolPromptOnAbort(
 		session: entry.toolSession,
 		signal: entry.signal,
 		emitStatus: entry.emitStatus,
+		onReply: entry.onReply,
 		identity,
 	});
 	const signal = entry.shieldedSignal ?? entry.signal;
