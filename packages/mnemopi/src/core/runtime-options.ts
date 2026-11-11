@@ -48,6 +48,8 @@ export interface MnemopiEmbeddingRuntimeOptions {
 	 * init instead of letting the library re-download into the operator's path.
 	 */
 	cacheDir?: string;
+	/** Override `MNEMOPI_EMBEDDING_BATCH_SIZE`: max texts per embedding API request. */
+	batchSize?: number;
 }
 
 export interface MnemopiLlmRuntimeOptions {
@@ -78,6 +80,7 @@ export interface ResolvedMnemopiEmbeddingRuntimeOptions {
 	provider?: MnemopiEmbeddingProvider;
 	maxInputChars?: number;
 	cacheDir?: string;
+	batchSize?: number;
 }
 
 export interface ResolvedMnemopiLlmRuntimeOptions {

@@ -42,7 +42,7 @@ export interface JudgmentWire {
 		request: JudgmentRequest<Questions | WireQuestions>,
 		model: string,
 		imageAssets?: JudgmentImageAssets,
-	): unknown;
+	): Record<string, unknown>;
 	/** Headers this dialect adds to requests that carry images. */
 	imageHeaders?: Readonly<Record<string, string>>;
 	/** Image input this dialect accepts; absent means text-only. */

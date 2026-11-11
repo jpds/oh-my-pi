@@ -372,20 +372,21 @@ export class CredentialSelector {
 		blockScopes: string | readonly string[] | undefined,
 		options?: AuthApiKeyOptions,
 	): Promise<UsageRankingResult<OAuthCredential>> {
-		let blockedUntil = this.#deps.blocks.blockedUntil(provider, providerKey, selection.index, blockScopes);
 		let usage: UsageReport | null = null;
 		let usageChecked = false;
-		if (
-			blockedUntil !== undefined &&
-			this.#deps.blocks.canHeal(provider, providerKey, selection.index, blockScopes)
-		) {
-			usage = await this.#deps.usage.report(provider, selection.credential, {
-				...options,
-				timeoutMs: this.#deps.usage.requestTimeoutMs,
-			});
+		const probed = await this.#deps.usage.probeBlocked(
+			provider,
+			providerKey,
+			selection.index,
+			selection.credential,
+			blockScopes,
+			options,
+		);
+		if (probed !== undefined) {
+			usage = probed;
 			usageChecked = true;
-			blockedUntil = this.#deps.blocks.blockedUntil(provider, providerKey, selection.index, blockScopes);
 		}
+		const blockedUntil = this.#deps.blocks.blockedUntil(provider, providerKey, selection.index, blockScopes);
 		if (blockedUntil === undefined && !usageChecked) {
 			usage = await this.#deps.usage.report(provider, selection.credential, {
 				...options,
@@ -962,14 +963,11 @@ export class CredentialSelector {
 			}
 		}
 
-		const passes: Array<{
-			allowBlocked: boolean;
-			enforcePlanRequirement: boolean;
-			enforceAccounts: boolean;
-		}> = [
-			{ allowBlocked: false, enforcePlanRequirement, enforceAccounts },
-			{ allowBlocked: true, enforcePlanRequirement, enforceAccounts },
-		];
+		const passes = [{ allowBlocked: false, enforcePlanRequirement, enforceAccounts }];
+		// Discovery may have observed only part of the pool. Try other unblocked
+		// accounts before reusing a blocked discovery match, without relaxing plan gates.
+		if (enforceAccounts) passes.push({ allowBlocked: false, enforcePlanRequirement, enforceAccounts: false });
+		passes.push({ allowBlocked: true, enforcePlanRequirement, enforceAccounts });
 		if (enforcePlanRequirement) passes.push({ allowBlocked: true, enforcePlanRequirement: false, enforceAccounts });
 		if (enforceAccounts) passes.push({ allowBlocked: true, enforcePlanRequirement: false, enforceAccounts: false });
 		// Blocked candidates rank earliest-unblock first, which would route a
