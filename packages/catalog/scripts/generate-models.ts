@@ -259,11 +259,62 @@ async function fetchProviderModelsFromCatalog(
 	}
 }
 
-async function loadModelsDevData(): Promise<ModelSpec[]> {
+/**
+ * On-disk snapshot of the stencil.so catalog payload.
+ *
+ * The stencil catalog is the generator's only source that cannot be replaced by
+ * the previous `models.json`: it supplies cross-provider reference rows and the
+ * models.dev-only providers (chutes, liquid, nace, antigravity-cli). Caching the
+ * raw payload keeps a regeneration possible on a machine without network access
+ * (air-gapped hosts, sandboxes with an egress allowlist, CI without a catalog
+ * mirror) instead of silently dropping those providers from the bundle.
+ */
+const STENCIL_SNAPSHOT_PATH = path.join(packageRoot, ".cache", "stencil-models.json");
+
+async function readStencilSnapshot(snapshotPath: string): Promise<unknown> {
+	const file = Bun.file(snapshotPath);
+	if (!(await file.exists())) {
+		throw new Error(
+			`stencil.so snapshot not found at ${snapshotPath}; run gen:models with network access once to record it`,
+		);
+	}
+	return JSON.parse(await file.text());
+}
+
+async function writeStencilSnapshot(snapshotPath: string, payload: unknown): Promise<void> {
+	await Bun.write(snapshotPath, JSON.stringify(payload));
+}
+
+interface StencilSourceOptions {
+	/** Replay this payload instead of fetching; a failed fetch falls back to it when unset. */
+	readonly snapshotPath?: string;
+	/** Where a fetched payload is recorded for later offline runs; skipped when false. */
+	readonly saveSnapshotPath?: string | false;
+}
+
+async function loadModelsDevData(options: StencilSourceOptions = {}): Promise<ModelSpec[]> {
 	try {
-		console.log("Fetching stencil.so catalog from catalog.stencil.so...");
-		const data = await fetchWellKnownModels();
-		const models = mapModelsDevToModels(data as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS);
+		let payload: unknown;
+		if (options.snapshotPath !== undefined) {
+			console.log(`Loading stencil.so catalog snapshot from ${options.snapshotPath}...`);
+			payload = await readStencilSnapshot(options.snapshotPath);
+		} else {
+			try {
+				console.log("Fetching stencil.so catalog from catalog.stencil.so...");
+				payload = await fetchWellKnownModels();
+				if (options.saveSnapshotPath !== undefined && options.saveSnapshotPath !== false) {
+					await writeStencilSnapshot(options.saveSnapshotPath, payload);
+				}
+			} catch (error) {
+				if (!(await Bun.file(STENCIL_SNAPSHOT_PATH).exists())) throw error;
+				console.warn(
+					`stencil.so fetch failed, replaying the cached snapshot ${STENCIL_SNAPSHOT_PATH}:`,
+					error instanceof Error ? error.message : error,
+				);
+				payload = await readStencilSnapshot(STENCIL_SNAPSHOT_PATH);
+			}
+		}
+		const models = mapModelsDevToModels(payload as Record<string, unknown>, MODELS_DEV_PROVIDER_DESCRIPTORS);
 		models.sort((a, b) => a.id.localeCompare(b.id));
 		console.log(`Loaded ${models.length} models from stencil.so`);
 		return models;
@@ -569,7 +620,7 @@ async function fetchCodexDiscoveryModels(): Promise<ModelSpec<"openai-codex-resp
 	return [...models];
 }
 
-async function generateModels(selectedProvider?: string) {
+async function generateModels(selectedProvider?: string, stencil: StencilSourceOptions = {}) {
 	// Retire a single provider without refreshing unrelated model rows.
 	if (selectedProvider !== undefined && isRetiredProvider(selectedProvider)) {
 		const models = { ...prevModelsJson };
@@ -579,7 +630,7 @@ async function generateModels(selectedProvider?: string) {
 		return;
 	}
 	// Fetch models from dynamic sources.
-	const modelsDevModels = await loadModelsDevData();
+	const modelsDevModels = await loadModelsDevData(stencil);
 	const catalogProviderDescriptors = PROVIDER_DESCRIPTORS.filter(
 		(descriptor): descriptor is CatalogProviderDescriptor =>
 			isCatalogDescriptor(descriptor) &&
@@ -833,8 +884,19 @@ export function buildGeneratedModel(model: ModelSpec<Api>): Model<Api> {
 }
 
 if (import.meta.main) {
-	const { values } = parseArgs({ args: Bun.argv.slice(2), options: { provider: { type: "string" } } });
-	generateModels(values.provider).catch(error => {
+	const { values } = parseArgs({
+		args: Bun.argv.slice(2),
+		options: {
+			provider: { type: "string" },
+			// Replay a recorded stencil.so payload instead of fetching it.
+			snapshot: { type: "string" },
+			// Record this run's payload here for later offline runs.
+			"save-snapshot": { type: "string" },
+			"no-save-snapshot": { type: "boolean", default: false },
+		},
+	});
+	const saveSnapshotPath = values["no-save-snapshot"] ? false : (values["save-snapshot"] ?? STENCIL_SNAPSHOT_PATH);
+	generateModels(values.provider, { snapshotPath: values.snapshot, saveSnapshotPath }).catch(error => {
 		console.error(error);
 		process.exitCode = 1;
 	});
