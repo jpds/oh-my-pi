@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { getRoleInfo } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
@@ -48,6 +49,13 @@ describe("getRoleInfo", () => {
 		expect(acceptedIds("speech", settings)).toEqual(["speech"]);
 		expect(acceptedIds("dictation", settings)).toEqual(["local-dictation", "cloud-dictation"]);
 		expect(acceptedIds("judge", settings)).toEqual(["chat", "explicit-chat", "grounded-chat", "tiny", "judge"]);
+	});
+
+	test("local chat model backs the smol role", () => {
+		const model = getBundledModel("local", "lfm3-1.7b");
+		expect(model).toBeDefined();
+		if (!model) return;
+		expect(getRoleInfo("smol", Settings.isolated({})).accepts(model)).toBe(true);
 	});
 
 	test("custom metadata overrides presentation without widening model acceptance", () => {

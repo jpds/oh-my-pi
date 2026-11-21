@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ## [19.2.1] - 2026-11-25
+- Added GLM-5.4 to the Zhipu Coding Plan with image input and 1M context, gave it the low/high/max thinking ladder on every host, and preferred it over GLM-5.3 for the `slow` role
+- Added `fetchOpenRouterChatModels()` and `OPENROUTER_BASE_URL` to `@oh-my-pi/pi-catalog/provider-models/openai-compat` for reading OpenRouter's tool-capable chat roster outside the `openrouter` provider.
+- `toolSchemaFlavor: "google"` rewrites OpenAI-compatible tool schemas into Gemini's dialect; GitHub Copilot Gemini models use it ([#20198](https://github.com/can1357/oh-my-pi/issues/20198))
+- Added `local/lfm3-1.7b` (LFM3 1.7B) as a chat-kind on-device model with a 256K context, so the `smol` role can run it through the local inference worker
+- Added `uncached-instructions` compatibility flag, enabled for GPT-6.2 models on every host, which moves the system prompt out of the uncached Responses `instructions` field
 
 ### Fixed
 

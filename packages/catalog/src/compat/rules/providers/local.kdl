@@ -103,6 +103,13 @@ provider "local" {
 			limits
 			supports-tools #false
 		}
+		model "lfm3-1.7b" name="LFM3 1.7B" {
+			reasoning #true
+			input "text"
+			cost input=0 output=0 cache-read=0 cache-write=0
+			limits context=262144
+			supports-tools #false
+		}
 	}
 
 	models "phonon-31m" {
@@ -113,5 +120,10 @@ provider "local" {
 	}
 	models "lfm*" "falcon-*" "qwen*" "llama3.2:3b" "gemma-3-1b" {
 		kind "tiny"
+	}
+	// LFM3 1.7B backs the `smol` chat role on-device; the exact selector outranks
+	// the `lfm*` glob above (MATCHER_RANK: exact 4, glob 0).
+	models "lfm3-1.7b" {
+		kind "chat"
 	}
 }
