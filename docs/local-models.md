@@ -28,7 +28,7 @@ Inspect the catalog with `omp models --kind tiny`, `omp models --kind tts`, and 
 
 The tiny-model CLI and source registry retain **title** and **memory** groupings because those are the workloads used to benchmark and recommend model sizes. They are not runtime model classes: every title and memory entry has catalog kind `tiny`, and any compatible entry can be assigned to `tiny`, `memory`, or `judge`. Choose based on quality and resource needs rather than the CLI grouping alone.
 
-A third group, `LOCAL_CHAT_MODELS` in the same source file, holds on-device models that back the `smol` chat role instead: they carry catalog kind `chat`, are served by the same worker, and are intentionally absent from `TINY_LOCAL_MODELS`, `omp models --kind tiny`, and `omp tiny-models list`. `local/lfm3-1.7b` (LFM3 1.7B, 256K context, reasoning-capable, ONNX q4 ≈ 1.6 GB) is the current entry; the worker always renders it with `enable_thinking: false`, and local inference carries text only — no tool calls and no streaming.
+A third group, `LOCAL_CHAT_MODELS` in the same source file, holds on-device models that back the `smol` chat role instead: they carry catalog kind `chat`, are served by the same worker, and are intentionally absent from `TINY_LOCAL_MODELS`, `omp models --kind tiny`, and `omp tiny-models list`. `local/lfm3-1.7b` (LFM3 1.7B, 256K context, reasoning-capable, ONNX q4 ≈ 1.3 GB) is the current entry; the worker always renders it with `enable_thinking: false`, and local inference carries text only — no tool calls and no streaming.
 
 ## Runtime / environment findings
 

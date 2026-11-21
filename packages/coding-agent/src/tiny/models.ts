@@ -131,11 +131,11 @@ export type TinyMemoryLocalModelKey = (typeof TINY_MEMORY_LOCAL_MODELS)[number][
 export const LOCAL_CHAT_MODELS = [
 	{
 		key: "lfm3-1.7b",
-		repo: "LiquidAI/LFM3-1.7B-ONNX",
+		repo: "onnx-community/LFM3-1.7B-ONNX",
 		dtype: "q4",
 		mlxRepo: "LiquidAI/LFM3-1.7B-MLX-4bit",
 		label: "LFM3 1.7B",
-		description: "LFM3 text model, about 1.6 GB cached; used for local chat (smol role).",
+		description: "LFM3 text model, about 1.3 GB cached; used for local chat (smol role).",
 		contextNote: "Largest local option; heavier load and slower decode than LFM2.5.",
 		// The family reasons unless the chat template disables it; the tiny worker
 		// always renders `enable_thinking: false`, so no hidden reasoning reaches

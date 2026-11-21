@@ -10,7 +10,7 @@ afterEach(() => {
 describe("tiny-models download model resolution", () => {
 	it("keeps local chat models servable by the worker but out of the tiny registry list", () => {
 		// smol-role chat models resolve through the worker spec lookup…
-		expect(getTinyLocalModelSpec("lfm3-1.7b")?.repo).toBe("LiquidAI/LFM3-1.7B-ONNX");
+		expect(getTinyLocalModelSpec("lfm3-1.7b")?.repo).toBe("onnx-community/LFM3-1.7B-ONNX");
 		// …without being advertised as tiny/memory entries.
 		expect(TINY_LOCAL_MODELS.map(spec => spec.key)).not.toContain("lfm3-1.7b");
 		expect(resolveModels("lfm3-1.7b")).toEqual(["lfm3-1.7b"]);
