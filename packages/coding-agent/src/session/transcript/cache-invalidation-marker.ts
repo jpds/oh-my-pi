@@ -42,14 +42,18 @@ export interface CacheInvalidation {
  * when only the shared block was warm: nothing proven live was lost.
  *
  * Returns `undefined` (no marker) for the first turn, turns whose predecessor
- * never read a warm prefix, tiny contexts, turns that read back at least half
- * of the predecessor's warm prefix, and — crucially — turns on providers with
- * *implicit* best-effort caching. Only an
- * explicit, prefix-controlled cache (Anthropic / Bedrock `cache_control`)
- * re-creates the prefix on a cold turn (`cacheWrite > 0`); implicit caches
- * (Google / OpenAI / Fireworks) report `cacheWrite: 0` and drop `cacheRead` to
- * zero intermittently as routine propagation noise that self-heals the next
- * turn, so flagging it would be a false positive.
+ * never read a warm prefix, tiny contexts, and turns that read back at least
+ * half of the predecessor's warm prefix.
+ *
+ * A `cacheWrite` is deliberately not required. Explicit, prefix-controlled
+ * caches (Anthropic / Bedrock `cache_control`) report it, but implicit
+ * best-effort caches (Google / OpenAI / Fireworks, and the aggregators that
+ * proxy them) report only `cacheRead`, so every cold turn there carries
+ * `cacheWrite: 0` — requiring a write suppressed 100% of the observed misses
+ * (0 of 628 warm→cold collapses across 52k requests). Since an unreported
+ * split cannot prove a collapse is *not* a miss, the demonstrably warm → cold
+ * transition decides on its own: the provider bills such a turn's whole prompt
+ * as `input`, so `reprocessedTokens` still reports the uncached figure.
  */
 export function detectCacheInvalidation(prev: Usage | undefined, current: Usage): CacheInvalidation | undefined {
 	if (!prev) return undefined;
@@ -61,11 +65,9 @@ export function detectCacheInvalidation(prev: Usage | undefined, current: Usage)
 	// The prefix survived when this turn read back at least half of what the
 	// previous one did; normal turns read all of it plus the previous write.
 	if (current.cacheRead * 2 >= prev.cacheRead) return undefined;
-	// Only an explicit, prefix-controlled cache re-creates the prefix on a cold
-	// turn — Anthropic/Bedrock report that as `cacheWrite`. Implicit best-effort
-	// caches (Google/OpenAI/Fireworks) report `cacheWrite: 0` and drop `cacheRead`
-	// to zero intermittently as propagation noise, not a real invalidation.
-	if (current.cacheWrite <= 0) return undefined;
+	// Explicit caches report the re-created prefix as `cacheWrite`; implicit
+	// best-effort caches never report one, so a cold turn there bills the prompt
+	// as `input`. Summing both keeps the reprocessed figure correct either way.
 	const reprocessedTokens = current.cacheWrite + current.input;
 	if (reprocessedTokens < MIN_CACHE_FOOTPRINT) return undefined;
 	return { reprocessedTokens };
