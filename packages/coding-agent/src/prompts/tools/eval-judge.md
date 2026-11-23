@@ -21,8 +21,8 @@ await judge(state, questions, { images?: [path | ImageContent, …] }) → `{id:
     Typed judgment over one `state` (non-empty {{#if py}}str{{else}}string{{/if}} | JSON object | JSON array).
     - Every question sees the same state and is answered independently: batch independent questions into one call.
     - Cheap and fast (TypeSafe when credentialed, else the tiny/smol chat model); prefer over `completion()` for classification, yes/no, ranking.
-    - Two or more states → `{{#if py}}judge_batch{{else}}judgeBatch{{/if}}`, never a loop of `judge()`.
-    `questions`: `{id: q}` where q is one of
+    - Two or more states → {{#if py}}`judge_batch`{{/if}}{{#if js}}{{#if py}} (Python) / {{/if}}`judgeBatch`{{#if py}} (JS){{/if}}{{/if}}, never a loop of `judge()`.
+    `questions`: `{id: q}` — or a list of `{id, ...q}` entries keyed on the embedded id — where q is one of
       `{type: "choice", instructions, criteria: {label: rubric | {{#if py}}None{{else}}null{{/if}}, …}}` → `{choice, probabilities: {label: p}, confidence}` (≥2 labels)
       `{type: "bool", instructions, criteria?: {true?: {{#if py}}str{{else}}string{{/if}}, false?: {{#if py}}str{{else}}string{{/if}}}}` → `{bool: P(yes)}`
       `{type: "score", instructions, criteria: [lowest, …, highest]}` → `{score, probabilities: {"0": p, …}, confidence}`
@@ -37,15 +37,15 @@ await judgeBatch(states, questions, { intent?, concurrency?, retries?, minOk?, i
 {{/if}}
     Images accept local paths or embedded `ImageContent`; batch attachments map each state key to its list (array inputs use zero-based index keys).
     Image requests skip candidates without image support, never silently drop images, and fail if no compatible judge remains.
-    Same `questions` over every state (`{key: state}` or a list keyed by index), run and owned by the host — it outlives the cell.
+    Same `questions` over every state (`{key: state}` or a list keyed by index). Over the tool bridge the run is host-owned — it outlives the cell{{#if py}}; under a native judge it is kernel-local: not a host job, so `wait`/completion auto-delivery/`agent://` addressing don't apply and `cost` reads 0.0. The Python batch is awaitable and resolves to itself, so `await judge_batch(…)` also works{{/if}}.
     - `concurrency` is capped at 32.
     - `intent` is an optional nonempty progress/job label (default `"Judging"`).
     Returns at once; pull settled items in bounded slices across cells:
     - `await b.drain(timeout?)` (seconds; omitted waits for the next item) → {{#if py}}`[(key, item)]`{{else}}`[[key, item]]`{{/if}} settled since the last drain
       (`[]` on timeout or once the run is done; `item.ok` → `item.answers`, else `item.error`; item failures never raise)
     - `{{#if py}}async for k, item in b.drain_iter(timeout){{else}}for await (const [k, item] of b.drainIter({ timeout })){{/if}}` until timeout or completion
-    - `{{#unless py}}await {{/unless}}b.status()` → `{id, intent, done, total, failed, cost, running, model?, elapsedS, error?}`
-    - `{{#unless py}}await {{/unless}}b.results()` → `{key: answers}` so far
+    - `{{#unless py}}await {{/unless}}b.status()` → `{id, intent, done, total, failed, cost, running, model?, elapsedS, error?}` (`elapsedS` freezes once the run settles)
+    - `{{#unless py}}await {{/unless}}b.results()` → `{key: item}` for every settled item so far (the same shape `drain()` yields, failures included)
     - `{{#unless py}}await {{/unless}}b.failed()` → `{key: error}`
     - `{{#unless py}}await {{/unless}}b.cancel()`
     - `{{#unless py}}await {{/unless}}b.close()` cancels it if running and releases it.
@@ -55,7 +55,7 @@ await judgeBatch(states, questions, { intent?, concurrency?, retries?, minOk?, i
 {{#if waitTool}}
     - the `wait` tool (not kernel `wait()`) blocks when you have nothing else to do
 {{/if}}
-    - `{{#if py}}judge_batch.attach(id){{else}}await judgeBatch.attach(id){{/if}}` re-creates the ref after a reset.
+    - `{{#if py}}judge_batch.attach(id){{/if}}{{#if js}}{{#if py}} (Python) / {{/if}}await judgeBatch.attach(id){{#if py}} (JS){{/if}}{{/if}}` re-creates the ref after a reset.
 {{#ifAll py js}}
     JS: ONE trailing object — `b = await judgeBatch(states, questions, { intent, concurrency, retries, minOk, images })`.
     - `await` every `b` method except `drainIter`, which you iterate with `for await (const [k, item] of b.drainIter({ timeout }))`.

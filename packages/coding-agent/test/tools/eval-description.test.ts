@@ -108,6 +108,18 @@ describe("eval tool description", () => {
 		expect(disabled.agents).not.toContain("tools?=None");
 	});
 
+	it("names each language's judge spelling in a dual-language reference", () => {
+		const both = getEvalDocTopics({ py: true, js: true });
+		expect(both.judge).toContain("`judge_batch`");
+		expect(both.judge).toContain("`judgeBatch`");
+		const pyOnly = getEvalDocTopics({ py: true, js: false });
+		expect(pyOnly.judge).toContain("`judge_batch`");
+		expect(pyOnly.judge).not.toContain("`judgeBatch`");
+		const jsOnly = getEvalDocTopics({ py: false, js: true });
+		expect(jsOnly.judge).toContain("`judgeBatch`");
+		expect(jsOnly.judge).not.toContain("`judge_batch`");
+	});
+
 	// Advertisement content is covered through the task tool (task-schema.test.ts); this pins the eval gate.
 	it("advertises approved agent()/workpool() selectors only while task.perCallModel is not off", () => {
 		for (const mode of ["off", "on", "eval"] as const) {
