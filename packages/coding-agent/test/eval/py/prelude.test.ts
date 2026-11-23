@@ -441,7 +441,10 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 			expect(value).toEqual({
 				ok_keys: ["x"],
 				failed_keys: ["y"],
-				results: { x: { q: { type: "bool", bool: 1 } } },
+				results: {
+					x: { key: "x", answers: { q: { type: "bool", bool: 1 } }, model: "typesafe/jev-preview", error: null },
+					y: { key: "y", answers: null, error: expect.stringContaining("API error (500)"), model: null },
+				},
 				done: 2,
 				failed: 1,
 				total: 2,
@@ -565,5 +568,90 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		expect(result.stdout).toContain("eval tool bridge unreachable at http://127.0.0.1:1");
 		expect(result.stdout).toContain("'test-session'");
 		expect(result.stdout).not.toContain("Traceback");
+	});
+});
+
+describe("python judge question normalization", () => {
+	it("accepts list-form questions keyed on their embedded id and rejects malformed entries", async () => {
+		const result = await runPrelude(
+			[
+				"normalized = _judge_questions([",
+				'    {"id": "a", "type": "bool", "instructions": "x"},',
+				'    {"id": "b", "type": "score", "instructions": "y", "criteria": ["low", "high"]},',
+				"])",
+				"passthrough = _judge_questions({'c': {'type': 'bool', 'instructions': 'z'}})",
+				"async def main():",
+				"    errors = []",
+				"    for questions in (",
+				'        [{"type": "bool", "instructions": "x"}],',
+				'        [{"id": "a", "type": "bool", "instructions": "x"}, {"id": "a", "type": "bool", "instructions": "y"}],',
+				"        [],",
+				'        "tests",',
+				"    ):",
+				"        try:",
+				'            await judge("hello", questions)',
+				'            errors.append("no-error")',
+				"        except TypeError as exc:",
+				"            errors.append(str(exc))",
+				'    print(json.dumps({"normalized": normalized, "passthrough": passthrough, "errors": errors}, sort_keys=True))',
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			normalized: {
+				a: { type: "bool", instructions: "x" },
+				b: { type: "score", instructions: "y", criteria: ["low", "high"] },
+			},
+			passthrough: { c: { type: "bool", instructions: "z" } },
+			errors: [
+				'question entry 0 must carry a non-empty string "id" (or pass questions as a dict keyed by id)',
+				'duplicate question id "a"',
+				"judge() received invalid arguments: questions must contain at least one question",
+				"judge questions must be a dict keyed by id ({q_best: {...}}) or a list of {\"id\": ..., ...question} entries (got str)",
+			],
+		});
+	});
+
+	it("names the calling helper when a host-mediated helper lacks the bridge", async () => {
+		const result = await runPrelude(
+			[
+				"async def main():",
+				"    errors = []",
+				"    async def label(call):",
+				"        try:",
+				"            await call()",
+				'            errors.append("no-error")',
+				"        except RuntimeError as exc:",
+				'            errors.append(str(exc).split(" cannot run:")[0])',
+				'    await label(lambda: tool.read({"path": "x"}))',
+				'    await label(lambda: _omp_prelude("omp_find", {}))',
+				'    await label(lambda: wait([_Handle("missing")], timeout=0))',
+				"    for start in (lambda: completion('hi'), lambda: agent('hi')):",
+				"        try:",
+				"            start()",
+				'            errors.append("no-error")',
+				"        except RuntimeError as exc:",
+				'            errors.append(str(exc).split(" cannot run:")[0])',
+				"    print(json.dumps(errors))",
+				"",
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		// Each surface reports the helper the cell actually called, not a generic bridge error.
+		expect(JSON.parse(result.stdout.trim())).toEqual([
+			"tool.read(...)",
+			"omp_find() prelude helper",
+			"wait()",
+			"completion()",
+			"agent()",
+		]);
 	});
 });

@@ -103,7 +103,14 @@ export function rebakeModelThinking(model: ModelSpec<Api>): void {
 	if (model.provider === "openrouter" && model.thinking?.requiresEffort === true) return;
 	const requiresProviderAuthoredEffort =
 		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
-	const policy = resolveModelPolicy({ ...model, thinking: undefined });
+	let policy = resolveModelPolicy({ ...model, thinking: undefined });
+	if (policy.thinking?.unverified === true && model.reasoning !== true) {
+		// A capability-less discovery spec (`/models` reports no reasoning) only
+		// carries the provisional ladder. Once capability is known, a reviewed
+		// provider/class ladder outranks that guess, so re-derive it: the baked
+		// row must match the compat-parity projection of itself.
+		policy = resolveModelPolicy({ ...model, thinking: undefined, reasoning: true });
+	}
 	if (policy.thinking) {
 		model.thinking = requiresProviderAuthoredEffort ? { ...policy.thinking, requiresEffort: true } : policy.thinking;
 		// Mirror `buildModel`: an exact `thinking-efforts` rule upgrades a

@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { Api, AssistantMessage, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
+import * as vm from "node:vm";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { AsyncJobManager } from "../../src/async";
@@ -10,6 +11,7 @@ import { Settings } from "../../src/config/settings";
 import { EVAL_HANDLE_CONCURRENCY, evalRequestSlots } from "../../src/eval/completion-bridge";
 import { disposeAllVmContexts } from "../../src/eval/js/context-manager";
 import { executeJs } from "../../src/eval/js/executor";
+import { JAVASCRIPT_PRELUDE_SOURCE } from "../../src/eval/js/shared/prelude";
 import {
 	type JudgmentBatchItem,
 	type JudgmentBatchStatus,
@@ -301,8 +303,8 @@ describe("judge_batch bridge", () => {
 		)) as JudgmentBatchStatus;
 
 		const items = await drain(session, created.id, 5_000);
-		expect(items.find(item => item.key === 0)?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
-		expect(items.find(item => item.key === 1)?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+		expect(items.find(item => item.key === "0")?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+		expect(items.find(item => item.key === "1")?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
 		expect(complete).toHaveBeenCalledTimes(2);
 		for (const [state, original] of [
 			["state-zero", IMAGE_ONE],
@@ -477,13 +479,13 @@ describe("judge_batch bridge", () => {
 
 		// Near-simultaneous settles coalesce into one drain instead of one round-trip each.
 		const first = await drain(session, created.id, 5_000);
-		expect(first.map(item => item.key).sort()).toEqual([0, 1]);
-		expect(first.find(item => item.key === 0)).toEqual({
-			key: 0,
+		expect(first.map(item => item.key).sort()).toEqual(["0", "1"]);
+		expect(first.find(item => item.key === "0")).toEqual({
+			key: "0",
 			answers: { tests: { type: "bool", bool: 1 } },
 			model: "p/smol",
 		});
-		expect(first.find(item => item.key === 1)?.error).toContain('judgment "tests"');
+		expect(first.find(item => item.key === "1")?.error).toContain('judgment "tests"');
 		// Nothing new and the run is still going: a zero timeout returns immediately with nothing.
 		expect(await drain(session, created.id, 0)).toEqual([]);
 
@@ -491,7 +493,7 @@ describe("judge_batch bridge", () => {
 		gate.resolve("tests: no");
 		expect(await pending).toEqual([
 			{
-				key: 2,
+				key: "2",
 				answers: { tests: { type: "bool", bool: 0 } },
 				model: "p/smol",
 			},
@@ -506,10 +508,12 @@ describe("judge_batch bridge", () => {
 			model: "p/smol",
 		});
 		expect(final.error).toBeUndefined();
+		// results() mirrors drain()'s item shape for every settled item, failures included.
 		expect(await runEvalJudgmentBatch({ op: "results", id: created.id }, { session })).toEqual({
 			results: {
-				"0": { tests: { type: "bool", bool: 1 } },
-				"2": { tests: { type: "bool", bool: 0 } },
+				"0": { key: "0", answers: { tests: { type: "bool", bool: 1 } }, model: "p/smol" },
+				"1": { key: "1", error: expect.stringContaining('judgment "tests"') },
+				"2": { key: "2", answers: { tests: { type: "bool", bool: 0 } }, model: "p/smol" },
 			},
 		});
 		const failed = (await runEvalJudgmentBatch({ op: "failed", id: created.id }, { session })) as {
@@ -582,6 +586,46 @@ describe("judge_batch bridge", () => {
 		expect(manager?.getJob(created.id)?.status).toBe("cancelled");
 	});
 
+	it("returns settled items instead of raising when a cancelled run still met min_ok", async () => {
+		const gate = Promise.withResolvers<string>();
+		mockJudge({ "state-a": "tests: yes", "state-b": gate.promise, "state-c": gate.promise });
+		const { session } = makeSession();
+		const created = await create(session, ["state-a", "state-b", "state-c"], { concurrency: 1, minOk: 1 });
+		// One item settles before cancellation, satisfying min_ok.
+		const first: JudgmentBatchItem[] = [];
+		while (first.length === 0) first.push(...(await drain(session, created.id, 5_000)));
+		expect(first[0]?.key).toBe("0");
+		expect(first[0]?.answers).toEqual({ tests: { type: "bool", bool: 1 } });
+		expect(await runEvalJudgmentBatch({ op: "cancel", id: created.id }, { session })).toEqual({ cancelled: true });
+		gate.resolve("tests: yes");
+
+		const rest: JudgmentBatchItem[] = [];
+		for (;;) {
+			const batch = await drain(session, created.id, 5_000);
+			if (batch.length === 0) break;
+			rest.push(...batch);
+		}
+		expect(rest.map(item => item.key)).toEqual(["1", "2"]);
+		const final = await status(session, created.id);
+		expect(final.error).toBeUndefined();
+		expect(final.running).toBe(false);
+	});
+
+	it("freezes elapsedS once the run settles", async () => {
+		mockJudge({ "state-a": "tests: yes" });
+		const { session, manager } = makeSession();
+		const created = await create(session, ["state-a"]);
+		await manager?.getJob(created.id)?.promise;
+		const settled = await status(session, created.id);
+		expect(settled.running).toBe(false);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+		try {
+			expect((await status(session, created.id)).elapsedS).toBe(settled.elapsedS);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
 	it("scopes attach and release to the owning agent", async () => {
 		mockJudge({ "state-a": "tests: yes" });
 		const { session } = makeSession();
@@ -608,7 +652,7 @@ describe("judge_batch bridge", () => {
 		const created = await create(session, ["state-a"]);
 		expect(await drain(session, created.id, 5_000)).toEqual([
 			{
-				key: 0,
+				key: "0",
 				answers: { tests: { type: "bool", bool: 1 } },
 				model: "p/smol",
 			},
@@ -660,9 +704,9 @@ describe("judgeBatch() JS runtime", () => {
 				unknownImageError: string;
 			};
 			expect(report.items).toHaveLength(2);
-			expect(report.items.find(([key]) => key === 0)).toEqual([0, true, { tests: { type: "bool", bool: 1 } }]);
-			expect(report.items.find(([key]) => key === 1)?.[2]).toBe(
-				'images for input "1" must be an array of paths or image attachments',
+			expect(report.items.find(([key]) => key === "0")).toEqual(["0", true, { tests: { type: "bool", bool: 1 } }]);
+			expect(report.items.find(([key]) => key === "1")?.[2]).toBe(
+				"images for input 1 must be an array of paths or image attachments",
 			);
 			expect(report.unknownImageError).toBe('images contains unknown input key "unknown"');
 			expect(complete).toHaveBeenCalledTimes(1);
@@ -674,6 +718,77 @@ describe("judgeBatch() JS runtime", () => {
 			await disposeAllVmContexts();
 			tempDir.removeSync();
 		}
+	});
+});
+
+describe("judgeBatch() JS prelude", () => {
+	it("maps states to keyed items and drainIter stops on an empty drain", async () => {
+		const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+		const drains = [
+			{
+				items: [
+					{
+						key: "a",
+						answers: { ok: { type: "bool", bool: 1 } },
+						model: "p/smol",
+					},
+				],
+			},
+			{ items: [{ key: "b", error: "boom" }] },
+			{ items: [] },
+		];
+		const results = {
+			a: { key: "a", answers: { ok: { type: "bool", bool: 1 } }, model: "p/smol" },
+			b: { key: "b", error: "boom" },
+		};
+		const sandbox: Record<string, unknown> = {
+			__omp_call_tool__: async (name: string, args: Record<string, unknown>) => {
+				calls.push({ name, args });
+				if (name !== "__judge_batch__") throw new Error(`unexpected bridge call ${name}`);
+				if (args.op === "create") return { id: "jdgb-1", total: 2 };
+				if (args.op === "drain") return drains.shift();
+				if (args.op === "results") return { results };
+				if (args.op === "status") return { id: "jdgb-1", done: 2, total: 2, failed: 1, running: false };
+				throw new Error(`unexpected op ${String(args.op)}`);
+			},
+		};
+		vm.createContext(sandbox);
+		vm.runInContext(JAVASCRIPT_PRELUDE_SOURCE, sandbox);
+
+		const seen = await vm.runInContext(
+			`(async () => {
+				const b = await judgeBatch({ a: "first", b: "second" }, { ok: { type: "bool", instructions: "?" } }, { concurrency: 4 });
+				const out = [];
+				for await (const [key, item] of b.drainIter({ timeout: 30 })) out.push([key, item.ok, item.answers ?? item.error]);
+				const settled = await b.results();
+				return { id: b.id, total: b.total, out, settled, status: await b.status() };
+			})()`,
+			sandbox,
+		);
+
+		expect(seen).toEqual({
+			id: "jdgb-1",
+			total: 2,
+			out: [
+				["a", true, { ok: { type: "bool", bool: 1 } }],
+				["b", false, "boom"],
+			],
+			settled: results,
+			status: { id: "jdgb-1", done: 2, total: 2, failed: 1, running: false },
+		});
+		expect(calls[0]?.args).toEqual({
+			op: "create",
+			items: [
+				{ key: "a", state: "first" },
+				{ key: "b", state: "second" },
+			],
+			questions: { ok: { type: "bool", instructions: "?" } },
+			concurrency: 4,
+		});
+		const drainCalls = calls.filter(call => call.args.op === "drain");
+		expect(drainCalls).toHaveLength(3);
+		expect(drainCalls[0]?.args.id).toBe("jdgb-1");
+		expect(drainCalls[0]?.args.timeoutMs).toBeLessThanOrEqual(30_000);
 	});
 });
 async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<PythonResult> {
@@ -688,11 +803,12 @@ async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<Python
 	const cellOne = [
 		"import json",
 		'Q = {"tests": {"type": "bool", "instructions": "Does the request mention tests?"}}',
-		'b = judge_batch({"a": "add tests please", "b": "rename a local"}, Q, intent="Classifying: Test idiomacy")',
+		'b = await judge_batch({"a": "add tests please", "b": "rename a local"}, Q, intent="Classifying: Test idiomacy")',
 		"first = await b.drain(timeout=30)",
 		"second = await b.drain(timeout=30)",
 		"items = sorted(first + second, key=lambda kv: kv[0])",
 		"single = await judge('write tests', Q)",
+		"listanswers = await judge('write tests', [{'id': 'tests', 'type': 'bool', 'instructions': 'Does the request mention tests?'}])",
 		`image_batch = judge_batch({1.0: "image-float-one", "1": "image-string-one", 1.25: "image-fractional", 2.5: "image-invalid"}, Q, images={1.0: [${JSON.stringify(IMAGE_ONE)}], "1": [${JSON.stringify(IMAGE_TWO)}], 1.25: [${JSON.stringify(IMAGE_TWO)}], 2.5: "not an image list"}, retries=0)`,
 		"image_items = [entry async for entry in image_batch.drain_iter(timeout=30)]",
 		"image_results = {repr(k): [i.ok, i.answers or i.error] for k, i in image_items}",
@@ -703,13 +819,18 @@ async function runPythonJudgeBatchInSubprocess(tempDir: TempDir): Promise<Python
 		"    unknown_image_error = str(error)",
 		"else:",
 		'    raise AssertionError("unknown image key was accepted")',
-		'print(json.dumps({"id": b.id, "total": b.total, "items": [[k, i.ok, i.answers or i.error] for k, i in items], "single": single, "image_items": image_results, "unknown_image_error": unknown_image_error}))',
+		"qerr = None",
+		"try:",
+		"    await judge('x', 'nope')",
+		"except TypeError as exc:",
+		"    qerr = str(exc)",
+		'print(json.dumps({"id": b.id, "total": b.total, "items": [[k, i.ok, i.answers or i.error] for k, i in items], "single": single, "listanswers": listanswers, "qerr": qerr, "image_items": image_results, "unknown_image_error": unknown_image_error}))',
 	].join("\n");
 	const cellTwo = [
 		"import json",
 		"again = judge_batch.attach(b.id)",
 		"rest = await again.drain(timeout=0)",
-		'print(json.dumps({"rest": rest, "status": again.status()["done"], "results": sorted(again.results())}))',
+		'print(json.dumps({"rest": rest, "status": again.status()["done"], "results": again.results(), "failed": again.failed(), "dumped": json.dumps(rest)}))',
 		"again.close()",
 	].join("\n");
 	await Bun.write(
@@ -794,14 +915,27 @@ describe("judge_batch() Python prelude", () => {
 					["b", true, { tests: { type: "bool", bool: 0 } }],
 				],
 				single: { tests: { type: "bool", bool: 1 } },
+				listanswers: { tests: { type: "bool", bool: 1 } },
+				qerr: expect.stringContaining(
+					'judge questions must be a dict keyed by id ({q_best: {...}}) or a list of {"id": ...',
+				),
 			});
 			expect(String(one.id)).toMatch(/^jdgb-/);
-			expect(two).toEqual({ rest: [], status: 2, results: ["a", "b"] });
+			expect(two).toEqual({
+				rest: [],
+				status: 2,
+				results: {
+					a: { key: "a", answers: { tests: { type: "bool", bool: 1 } }, error: null, model: "p/smol" },
+					b: { key: "b", answers: { tests: { type: "bool", bool: 0 } }, error: null, model: "p/smol" },
+				},
+				failed: {},
+				dumped: "[]",
+			});
 			expect(one.image_items).toEqual({
-				"1": [true, { tests: { type: "bool", bool: 1 } }],
+				"'1.0'": [true, { tests: { type: "bool", bool: 1 } }],
 				"'1'": [true, { tests: { type: "bool", bool: 1 } }],
-				"1.25": [true, { tests: { type: "bool", bool: 1 } }],
-				"2.5": [false, 'images for input "2.5" must be an array of paths or image attachments'],
+				"'1.25'": [true, { tests: { type: "bool", bool: 1 } }],
+				"'2.5'": [false, 'images for input "2.5" must be an array of paths or image attachments'],
 			});
 			expect(one.unknown_image_error).toBe('images contains unknown input key "unknown"');
 			const imageReport = result.output.split("\n").find(line => line.startsWith("__IMAGE_BLOCKS__"));

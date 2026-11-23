@@ -10,8 +10,8 @@ if "__omp_prelude_loaded__" not in globals():
     from urllib.parse import unquote
 
 
-    # __omp_emit_status / __omp_emit_image are injected by runner.py before the
-    # prelude executes; they write `status` / `image` frames for the current cell.
+    # __omp_emit_status is injected by runner.py before the prelude executes;
+    # it writes `status` frames for the current cell.
     _emit_status = __omp_emit_status  # type: ignore[name-defined]
     _emit_image = __omp_emit_image  # type: ignore[name-defined]
 
@@ -391,17 +391,22 @@ if "__omp_prelude_loaded__" not in globals():
 
         return current
 
-    def _tool_proxy_from_env() -> tuple[str, str, str]:
+    def _tool_proxy_from_env() -> tuple[str, str, str] | None:
+        """HTTP tool-bridge coordinates, or None when the host did not provide one."""
         base = os.environ.get("PI_TOOL_BRIDGE_URL")
         token = os.environ.get("PI_TOOL_BRIDGE_TOKEN")
         session = os.environ.get("PI_TOOL_BRIDGE_SESSION")
         if not base or not token or not session:
-            raise RuntimeError(
-                "tool bridge is unavailable in this kernel "
-                "(no PI_TOOL_BRIDGE_URL; the host tool bridge may be disabled via PI_NO_TOOL_BRIDGE=1 "
-                "or no tool session is attached to this kernel)"
-            )
+            return None
         return (base.rstrip("/"), token, session)
+
+    def _bridge_unavailable(helper: str | None) -> RuntimeError:
+        return RuntimeError(
+            f"{helper or 'host-mediated helpers'} cannot run: the tool bridge is unavailable in this kernel "
+            "(no PI_TOOL_BRIDGE_URL; the host tool bridge may be disabled via PI_NO_TOOL_BRIDGE=1 "
+            "or no tool session is attached to this kernel). `judge()`/`judge_batch()` reach the model "
+            "directly when the host resolved a native judge for the role."
+        )
 
     import urllib.error, urllib.request
 
@@ -445,9 +450,12 @@ if "__omp_prelude_loaded__" not in globals():
             self.base = base
             self.session = session
 
-    def _bridge_call(name: str, args: dict):
-        """POST one request to the host tool bridge and return its `value`."""
-        base, token, session = _tool_proxy_from_env()
+    def _bridge_call(name: str, args: dict, helper: str | None = None):
+        """POST one host-mediated helper call to the tool bridge and return its `value`."""
+        target = _tool_proxy_from_env()
+        if target is None:
+            raise _bridge_unavailable(helper)
+        base, token, session = target
         _run_id_getter = globals().get("__omp_current_run_id__")
         _run_id = (
             _run_id_getter()
@@ -506,7 +514,14 @@ if "__omp_prelude_loaded__" not in globals():
             return value
         shown = 0
         for image in images:
-            if isinstance(image, dict) and isinstance(image.get("data"), str) and _emit_image(image):
+            if not isinstance(image, dict):
+                continue
+            data = image.get("data")
+            if not isinstance(data, str):
+                continue
+            # Emit the image payload verbatim so `detail`, `url`, and
+            # `providerFile` survive to provider normalization.
+            if _emit_image(image):
                 shown += 1
         if shown == 0:
             return value
@@ -521,6 +536,7 @@ if "__omp_prelude_loaded__" not in globals():
             _bridge_call,
             "__prelude__",
             {"name": name, "parameters": parameters},
+            f"{name}() prelude helper",
         )
         return _surface_bridged_tool_images(value)
 
@@ -547,7 +563,7 @@ if "__omp_prelude_loaded__" not in globals():
                 raise TypeError(
                     f"tool.{self._name}(...) expects a dict of arguments or a FREEFORM tool's raw text (got {type(args).__name__})"
                 )
-            value = await _omp_asyncio.to_thread(_bridge_call, self._name, merged)
+            value = await _omp_asyncio.to_thread(_bridge_call, self._name, merged, f"tool.{self._name}(...)")
             return _surface_bridged_tool_images(value)
 
     def _annotation_schema(annotation) -> dict:
@@ -754,6 +770,7 @@ if "__omp_prelude_loaded__" not in globals():
             snapshot = _bridge_call(
                 "__status__",
                 {"item": {"kind": self.kind, "id": self.id}},
+                helper=f"{self.kind} handle .status",
             )
             return snapshot.get("status") if isinstance(snapshot, dict) else "failed"
 
@@ -769,6 +786,7 @@ if "__omp_prelude_loaded__" not in globals():
             result = _bridge_call(
                 "__cancel__",
                 {"item": {"kind": self.kind, "id": self.id}},
+                helper=f"{self.kind} handle .cancel",
             )
             return bool(result.get("cancelled")) if isinstance(result, dict) else False
 
@@ -799,6 +817,7 @@ if "__omp_prelude_loaded__" not in globals():
                     "content": str(message),
                     "i": "Messaging agent",
                 },
+                helper="agent handle .send",
             )
 
         def output(self, **kwargs):
@@ -868,7 +887,7 @@ if "__omp_prelude_loaded__" not in globals():
             args = {"items": pending}
             if timeout is not None:
                 args["timeoutMs"] = max(0, float(timeout) * 1000)
-            response = _bridge_call("__wait__", args)
+            response = _bridge_call("__wait__", args, helper="wait()")
             snapshots = response.get("items", []) if isinstance(response, dict) else []
             for index, handle, snapshot in zip(
                 pending_indexes,
@@ -897,7 +916,7 @@ if "__omp_prelude_loaded__" not in globals():
             args["system"] = system
         if schema is not None:
             args["schema"] = schema
-        result = _bridge_call("__completion__", args)
+        result = _bridge_call("__completion__", args, helper="completion()")
         if not isinstance(result, dict) or not isinstance(result.get("id"), str):
             raise RuntimeError("completion() did not return a handle")
         return CompletionHandle(result["id"], schema)
@@ -1030,21 +1049,13 @@ if "__omp_prelude_loaded__" not in globals():
             return min(retry_after_s, _JUDGE_BACKOFF_MAX_S)
         return min(_JUDGE_BACKOFF_BASE_S * (2**attempt), _JUDGE_BACKOFF_MAX_S)
 
-    def _systemone_post(descriptor: dict, body: dict) -> dict:
-        """POST one System One request; retries transient failures (408/429/5xx, network)."""
-        url = descriptor["baseUrl"].rstrip("/") + descriptor["route"]
-        label = f"{descriptor.get('provider', 'typesafe')}/{descriptor.get('model')}"
-        headers = {
-            "Authorization": f"Bearer {descriptor['apiKey']}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        headers.update(descriptor.get("headers") or {})
+    def _http_post_retry(url: str, headers: dict, body: dict, label: str, timeout_s: float) -> dict:
+        """POST one JSON request; retries transient failures (408/429/5xx, network)."""
         data = json.dumps(body).encode("utf-8")
         for attempt in range(_JUDGE_MAX_ATTEMPTS):
             req = urllib.request.Request(url, data=data, method="POST", headers=headers)
             try:
-                with _JUDGE_OPENER.open(req, timeout=_JUDGE_TIMEOUT_S) as resp:
+                with _JUDGE_OPENER.open(req, timeout=timeout_s) as resp:
                     return json.loads(resp.read())
             except urllib.error.HTTPError as exc:
                 detail = exc.read()
@@ -1057,10 +1068,22 @@ if "__omp_prelude_loaded__" not in globals():
             except (urllib.error.URLError, TimeoutError) as exc:
                 if attempt + 1 >= _JUDGE_MAX_ATTEMPTS:
                     raise RuntimeError(
-                        f"judge transport {url} failed after {_JUDGE_MAX_ATTEMPTS} attempts: {exc}"
+                        f"{label} transport {url} failed after {_JUDGE_MAX_ATTEMPTS} attempts: {exc}"
                     ) from exc
                 time.sleep(_judge_backoff_s(attempt, None))
         raise RuntimeError("unreachable")
+
+    def _systemone_post(descriptor: dict, body: dict) -> dict:
+        """POST one System One judgment request to the native judge transport."""
+        url = descriptor["baseUrl"].rstrip("/") + descriptor["route"]
+        label = f"{descriptor.get('provider', 'typesafe')}/{descriptor.get('model')}"
+        headers = {
+            "Authorization": f"Bearer {descriptor['apiKey']}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        headers.update(descriptor.get("headers") or {})
+        return _http_post_retry(url, headers, body, label, _JUDGE_TIMEOUT_S)
 
     _JUDGE_CANONICAL_ANSWER_KEYS = ("choice", "noul", "score")
 
@@ -1113,7 +1136,7 @@ if "__omp_prelude_loaded__" not in globals():
         return value
 
     class _BridgeBatch:
-        """Operates a host-owned judgment run through the tool bridge."""
+        """Operates a host-owned judgment run over the kernel→host channel."""
 
         __slots__ = ("id",)
 
@@ -1121,7 +1144,7 @@ if "__omp_prelude_loaded__" not in globals():
             self.id = id
 
         def _call(self, op, **args):
-            return _bridge_call("__judge_batch__", {"op": op, "id": self.id, **args})
+            return _bridge_call("__judge_batch__", {"op": op, "id": self.id, **args}, helper=f"judge_batch.{op}()")
 
         def status(self):
             return self._call("status")
@@ -1153,7 +1176,10 @@ if "__omp_prelude_loaded__" not in globals():
     class _LocalBatchRun:
         """Kernel-owned bulk judgment run (mirrors the host-side `JudgmentBatch`).
 
-        Item failures are recorded per key, never raised; `drain` raises only on
+        Kernel-scoped, not a host job: `wait`, completion auto-delivery, and
+        `agent://` addressing don't see it; `drain` is the only observation
+        surface, and attach re-creates refs only within this kernel. Item
+        failures are recorded per key, never raised; `drain` raises only on
         wholesale death (`min_ok` unmet, cancelled).
         """
 
@@ -1222,9 +1248,18 @@ if "__omp_prelude_loaded__" not in globals():
                     self._model = result["model"]
                 if len(self._settled) >= self.total:
                     self._running = False
-                    if self._cancelled:
+                    # Drop the transport (it carries the API key) once every
+                    # item has settled: nothing judges again, and the registry
+                    # entry keeps attach-after-completion working without
+                    # retaining secrets.
+                    self._descriptor = None
+                    # A cancelled run that already met min_ok is not wholesale
+                    # death: drain() hands back the settled items, matching the
+                    # host-side `JudgmentBatch` (cancel stops further dispatch).
+                    judged = self.total - self._failed
+                    if self._cancelled and judged < self._min_ok:
                         self._error = "judge_batch cancelled"
-                    elif self.total - self._failed < self._min_ok:
+                    elif judged < self._min_ok:
                         self._error = (
                             f"judge_batch: only {self.total - self._failed}/{self.total} item(s) judged "
                             f"(min_ok={self._min_ok}); last error: {self._last_error() or 'unknown'}"
@@ -1289,7 +1324,7 @@ if "__omp_prelude_loaded__" not in globals():
 
         def results(self):
             with self._lock:
-                return {str(e["key"]): e["answers"] for e in self._settled if e.get("answers") is not None}
+                return {str(e["key"]): e for e in self._settled}
 
         def failed(self):
             with self._lock:
@@ -1327,9 +1362,36 @@ if "__omp_prelude_loaded__" not in globals():
         run.start()
         return run
 
-    def _check_questions(questions):
-        if not isinstance(questions, dict):
-            raise TypeError("judge(state, questions) expects questions as a dict keyed by id")
+    def _judge_questions(questions):
+        """Validate and normalize ``questions``: a dict keyed by id, or a list of ``{"id", ...question}`` entries.
+
+        Returns ``{id: question}`` with any embedded ``id`` stripped from list entries.
+        """
+        if isinstance(questions, dict):
+            normalized = dict(questions)
+        elif isinstance(questions, (list, tuple)):
+            normalized = {}
+            for index, entry in enumerate(questions):
+                if not isinstance(entry, dict):
+                    raise TypeError(f"question entry {index} must be an object")
+                id = entry.get("id")
+                if not isinstance(id, str) or not id:
+                    raise TypeError(
+                        f'question entry {index} must carry a non-empty string "id" '
+                        "(or pass questions as a dict keyed by id)"
+                    )
+                if id in normalized:
+                    raise TypeError(f'duplicate question id "{id}"')
+                normalized[id] = {key: value for key, value in entry.items() if key != "id"}
+        else:
+            raise TypeError(
+                "judge questions must be a dict keyed by id ({q_best: {...}}) "
+                'or a list of {"id": ..., ...question} entries '
+                f"(got {type(questions).__name__})"
+            )
+        if not normalized:
+            raise _judge_invalid("questions must contain at least one question")
+        return normalized
 
     async def judge(state, questions, *, images=None):
         """Answer typed questions over one ``state``; returns ``{id: answer}`` (choice/bool/score).
@@ -1337,45 +1399,64 @@ if "__omp_prelude_loaded__" not in globals():
         ``images`` is a list of local-path strings or embedded
         ``{"type": "image", "data": ..., "mimeType": ...}`` attachments.
         """
-        _check_questions(questions)
+        questions = _judge_questions(questions)
         args = {"state": state, "questions": questions}
         if images is not None:
             args["images"] = images
+        descriptor = _judge_direct_descriptor()
         # The direct path talks to the model itself and cannot carry images, so
         # image judgments still go through the host bridge.
-        descriptor = _judge_direct_descriptor()
         if descriptor is not None and images is None:
             wire_questions = _judge_wire_questions(questions, descriptor.get("judgment"))
             _judge_check_state(state)
             answers, _model = await _omp_asyncio.to_thread(_judge_once, descriptor, state, wire_questions)
             return answers
-        result = await _omp_asyncio.to_thread(_bridge_call, "__judge__", args)
+        result = await _omp_asyncio.to_thread(
+            _bridge_call, "__judge__", args, "judge() (bridge fallback)"
+        )
         if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
             raise RuntimeError("judge() did not return answers")
         return result["answers"]
 
-    class JudgmentItem:
-        """One settled ``judge_batch`` item: ``answers`` on success, else ``error``."""
+    class JudgmentItem(dict):
+        """One settled ``judge_batch`` item: ``answers`` on success, else ``error``.
 
-        __slots__ = ("key", "answers", "error", "model")
+        Subclasses ``dict`` (keys: ``key``, ``answers``, ``error``, ``model``) so
+        ``json.dumps(item)`` and ``json.dumps(list(batch.drain()))`` work; attribute
+        access (``item.answers``, ``item.error``, ``item.ok``) still works.
+        """
 
         def __init__(self, item):
-            self.key = item.get("key")
-            self.answers = item.get("answers")
-            self.error = item.get("error")
-            self.model = item.get("model")
+            super().__init__(
+                key=item.get("key"),
+                answers=item.get("answers"),
+                error=item.get("error"),
+                model=item.get("model"),
+            )
+
+        def __getattr__(self, name):
+            try:
+                return self[name]
+            except KeyError:
+                raise AttributeError(f"{type(self).__name__} has no attribute {name!r}") from None
 
         @property
         def ok(self):
-            return self.error is None
+            return self["error"] is None
 
         def __repr__(self):
-            if self.error is not None:
-                return f"<judgment {self.key!r} error={self.error!r}>"
-            return f"<judgment {self.key!r} {self.answers!r}>"
+            if self["error"] is not None:
+                return f"<judgment {self['key']!r} error={self['error']!r}>"
+            return f"<judgment {self['key']!r} {self['answers']!r}>"
 
     class JudgmentBatch:
-        """Bulk judgment run. Pull settled items with ``await drain()`` across as many cells as needed."""
+        """Bulk judgment run. Pull settled items with ``await drain()`` across as many cells as needed.
+
+        ``judge_batch()`` returns synchronously (the run is owned by the host,
+        outliving this cell), but the batch is awaitable and resolves to
+        itself, so ``await judge_batch(...)`` and ``judge_batch(...)`` are
+        interchangeable.
+        """
 
         __slots__ = ("id", "total", "intent", "_backend")
 
@@ -1385,12 +1466,19 @@ if "__omp_prelude_loaded__" not in globals():
             self.intent = intent
             self._backend = backend
 
+        def __await__(self):
+            # Awaiting the batch resolves to itself: `await judge_batch(...)`
+            # and `judge_batch(...)` are interchangeable.
+            if False:
+                yield
+            return self
+
         def status(self):
             """Snapshot: ``intent``, ``done``, ``total``, ``failed``, ``running``, ``model``, ``elapsedS``."""
             return self._backend.status()
 
         async def drain(self, timeout=None):
-            """Items settled since the last drain as ``[(key, JudgmentItem)]``; waits up to ``timeout`` seconds for at least one, else ``[]``."""
+            """Items settled since the last drain as ``[(key, JudgmentItem)]``; waits up to ``timeout`` seconds for at least one, else ``[]``. Always a list."""
             timeout_s = None if timeout is None else max(0.0, float(timeout))
             items = await _omp_asyncio.to_thread(self._backend.drain_items, timeout_s)
             return [(item.get("key"), JudgmentItem(item)) for item in items]
@@ -1407,8 +1495,9 @@ if "__omp_prelude_loaded__" not in globals():
                     yield entry
 
         def results(self):
-            """``{key: answers}`` for every item judged so far."""
-            return self._backend.results()
+            """``{key: JudgmentItem}`` for every item settled so far (successes and failures)."""
+            backend = self._backend.results()
+            return {key: item if isinstance(item, JudgmentItem) else JudgmentItem(item) for key, item in backend.items()}
 
         def failed(self):
             """``{key: error}`` for every item that failed so far."""
@@ -1447,21 +1536,27 @@ if "__omp_prelude_loaded__" not in globals():
         """Judge every state with the same ``questions``; returns a ``JudgmentBatch`` to drain across cells.
 
         ``states`` is ``{key: state}`` or a list (keys are indices). ``intent`` is an
-        optional nonempty progress/job label. Item failures land in ``JudgmentItem.error``;
-        only a run that dies wholesale raises from ``drain()``.
+        optional nonempty progress/job label. Host-owned when judging goes through
+        the tool bridge; under a native judge the run is kernel-scoped (no host
+        job: no auto-delivery, ``b.id`` only attaches within this kernel). The
+        batch is awaitable and resolves to itself, so ``await judge_batch(...)``
+        also works. Item failures land in ``JudgmentItem.error``; only a run
+        that dies wholesale raises from ``drain()``.
 
         ``images`` optionally maps state keys to lists of local-path strings or embedded
         ``{"type": "image", "data": ..., "mimeType": ...}`` attachments.
         """
-        _check_questions(questions)
+        questions = _judge_questions(questions)
         if intent is not None and (
             not isinstance(intent, str) or not intent.strip()
         ):
             raise TypeError("judge_batch() intent must be a non-empty string")
         if isinstance(states, dict):
-            items = [{"key": key, "state": state} for key, state in states.items()]
+            # Keys are strings everywhere so drain() tuples, item["key"], and
+            # results()/failed() dict keys agree.
+            items = [{"key": str(key), "state": state} for key, state in states.items()]
         elif isinstance(states, (list, tuple)):
-            items = [{"key": index, "state": state} for index, state in enumerate(states)]
+            items = [{"key": str(index), "state": state} for index, state in enumerate(states)]
         else:
             raise TypeError("judge_batch(states, questions) expects states as a dict or list")
         if images is not None:
@@ -1469,11 +1564,11 @@ if "__omp_prelude_loaded__" not in globals():
                 raise TypeError("judge_batch() images must be a dict keyed by input key")
             item_keys = {item["key"] for item in items}
             for key in images:
-                if key not in item_keys:
+                if str(key) not in item_keys:
                     raise ValueError(f"images contains unknown input key {json.dumps(key)}")
             for item in items:
-                if item["key"] in images:
-                    item["images"] = images[item["key"]]
+                if item["key"] in {str(key) for key in images}:
+                    item["images"] = images[next(key for key in images if str(key) == item["key"])]
         if not items:
             raise TypeError("judge_batch() received invalid arguments: items must not be empty")
         # Same image constraint as judge(): the direct path cannot carry them.
@@ -1491,14 +1586,16 @@ if "__omp_prelude_loaded__" not in globals():
             args["minOk"] = int(min_ok)
         if intent is not None:
             args["intent"] = intent
-        return _judge_batch_from(_bridge_call("__judge_batch__", args))
+        return _judge_batch_from(_bridge_call("__judge_batch__", args, helper="judge_batch()"))
 
     def _attach_judge_batch(id):
         """Re-create a ``JudgmentBatch`` ref by id (kernel-local run, or a host-owned run from another runtime)."""
         run = _JUDGE_BATCHES.get(str(id))
         if run is not None:
             return JudgmentBatch(run, run.total, run._intent)
-        return _judge_batch_from(_bridge_call("__judge_batch__", {"op": "attach", "id": str(id)}))
+        return _judge_batch_from(
+            _bridge_call("__judge_batch__", {"op": "attach", "id": str(id)}, helper="judge_batch.attach()")
+        )
 
     judge_batch.attach = _attach_judge_batch
 
@@ -1535,7 +1632,7 @@ if "__omp_prelude_loaded__" not in globals():
             args["tools"] = list(tools)
         if model is not None:
             args["model"] = model
-        result = _bridge_call("__agent__", args)
+        result = _bridge_call("__agent__", args, helper="agent()")
         if not isinstance(result, dict) or not isinstance(result.get("id"), str):
             raise RuntimeError("agent() did not return a handle")
         return AgentHandle(result["id"], result.get("agent"), schema)
@@ -1556,6 +1653,7 @@ if "__omp_prelude_loaded__" not in globals():
             result = _bridge_call(
                 "__workpool__",
                 {"op": "push", "name": self.name, "items": list(items)},
+                helper="workpool() pool .push",
             )
             return result.get("ids", []) if isinstance(result, dict) else []
 
@@ -1563,18 +1661,21 @@ if "__omp_prelude_loaded__" not in globals():
             return _bridge_call(
                 "__workpool__",
                 {"op": "status", "name": self.name},
+                helper="workpool() pool .status",
             )
 
         def peek(self):
             return _bridge_call(
                 "__workpool__",
                 {"op": "peek", "name": self.name},
+                helper="workpool() pool .peek",
             )
 
         def close(self):
             return _bridge_call(
                 "__workpool__",
                 {"op": "close", "name": self.name},
+                helper="workpool() pool .close",
             )
 
         def __repr__(self):
@@ -1593,7 +1694,7 @@ if "__omp_prelude_loaded__" not in globals():
             args["tools"] = list(tools)
         if model is not None:
             args["model"] = model
-        result = _bridge_call("__workpool__", args)
+        result = _bridge_call("__workpool__", args, helper="workpool()")
         if not isinstance(result, dict) or not isinstance(result.get("name"), str):
             raise RuntimeError("workpool() did not return a pool")
         return WorkPool(result["name"], result.get("agent"), result.get("limit"))
@@ -1614,20 +1715,20 @@ if "__omp_prelude_loaded__" not in globals():
 
         @property
         def total(self):
-            snap = _bridge_call("__budget__", {})
+            snap = _bridge_call("__budget__", {}, helper="budget")
             return (snap or {}).get("total")
 
         @property
         def hard(self):
-            snap = _bridge_call("__budget__", {})
+            snap = _bridge_call("__budget__", {}, helper="budget")
             return bool((snap or {}).get("hard"))
 
         def spent(self):
-            snap = _bridge_call("__budget__", {})
+            snap = _bridge_call("__budget__", {}, helper="budget")
             return int((snap or {}).get("spent") or 0)
 
         def remaining(self):
-            snap = _bridge_call("__budget__", {}) or {}
+            snap = _bridge_call("__budget__", {}, helper="budget") or {}
             total = snap.get("total")
             if total is None:
                 return math.inf
@@ -1635,7 +1736,7 @@ if "__omp_prelude_loaded__" not in globals():
 
         def __repr__(self):
             try:
-                snap = _bridge_call("__budget__", {}) or {}
+                snap = _bridge_call("__budget__", {}, helper="budget") or {}
                 return f"<budget total={snap.get('total')} spent={snap.get('spent')}>"
             except Exception:
                 return "<budget unavailable>"

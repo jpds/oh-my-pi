@@ -1186,6 +1186,7 @@ function appendUnbundledSeedModels(
 	discovered: readonly ModelSpec<Api>[] | null,
 ): readonly ModelSpec<Api>[] | null {
 	if (!discovered) return null;
+	if (discovered.length === 0) return discovered;
 	const known = new Set(getBundledModels(providerId).map(model => model.id));
 	for (const model of discovered) known.add(model.id);
 	const seeds = seedModels(providerId).filter(seed => !known.has(seed.id));
@@ -4197,8 +4198,10 @@ export interface VercelAiGatewayModelManagerConfig {
 }
 
 function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { baseUrl: string; catalogBaseUrl: string } {
-	const baseUrl = (rawBaseUrl === undefined ? "https://ai-gateway.vercel.sh" : rawBaseUrl.trim()).replace(/\/+$/, "");
-	const catalogBaseUrl = baseUrl === "" || baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+	const trimmed = rawBaseUrl?.trim();
+	const canonical = trimmed === undefined || trimmed === "" ? undefined : trimmed;
+	const baseUrl = (canonical ?? "https://ai-gateway.vercel.sh").replace(/\/+$/, "");
+	const catalogBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 
 	return {
 		baseUrl: baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl,
@@ -4259,9 +4262,8 @@ export function vercelAiGatewayModelManagerOptions(
 							input: inputModalities.includes("image") || tags.includes("vision") ? ["text", "image"] : ["text"],
 							supportsTools: false,
 							cost,
-							contextWindow:
-								typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
-							maxTokens: typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens,
+							contextWindow: toPositiveNumber(entry.context_window, defaults.contextWindow),
+							maxTokens: toPositiveNumber(entry.max_tokens, defaults.maxTokens),
 						};
 					}
 
@@ -4278,8 +4280,7 @@ export function vercelAiGatewayModelManagerOptions(
 						reasoning: Array.isArray(entry.tags) ? tags.includes("reasoning") : defaults.reasoning,
 						input: tags.includes("vision") ? ["text", "image"] : ["text"],
 						cost,
-						contextWindow:
-							typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
+						contextWindow: toPositiveNumber(entry.context_window, defaults.contextWindow),
 						maxTokens,
 					};
 				},

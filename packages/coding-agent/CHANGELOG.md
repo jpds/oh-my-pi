@@ -42,6 +42,7 @@
 - Eval kernels judge without the tool bridge: when the judge role resolves to a native System One judge, its transport is injected as `PI_JUDGE_DIRECT` and Python `judge`/`judge_batch` call the provider directly, so judgment works in sandboxes that refuse loopback TCP.
 - `PI_NO_TOOL_BRIDGE=1` skips the eval tool bridge entirely (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers fail fast with a typed, actionable error instead of dialing an unreachable endpoint.
 - Added Munito as a `/login` API-key provider (`MUNITO_API_KEY`) ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
+- Added per-model (and provider-level) `judgment` overrides (`route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) so `typesafe`-family models can answer System One judgments on compatible endpoints such as the Vercel AI Gateway's `/v1/evaluate` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
 
 ### Changed
 
@@ -49,6 +50,10 @@
 - With Vim editing mode on, `y` no longer copies to the system clipboard; use `"+y` / `"*y`, or turn on `tui.vimYankToClipboard` to get the old behavior ([#20037](https://github.com/can1357/oh-my-pi/pull/20037) by [@lericson](https://github.com/lericson))
 - With Vim editing mode on, the prompt after a message you send starts in **Vim Start Mode** (Insert by default) instead of staying in the mode you sent it from ([#20037](https://github.com/can1357/oh-my-pi/pull/20037) by [@lericson](https://github.com/lericson))
 - Python `judge_batch` runs kernel-locally in direct mode: batches live in the kernel (survive across cells via `judge_batch.attach(id)` within the kernel) rather than host-side; usage is not priced into session cost ledgers for direct judgment calls.
+- `judge_batch`/`judgeBatch` consumption is consistent: `results()` returns `{key: item}` in the same item shape `drain()` yields (successes and failures; was `{key: answers}`), Python `JudgmentItem` is a dict so `json.dumps(list(b.drain()))` and `json.dumps(b.results())` work, `drain()` always returns a list, and the Python batch is awaitable so `await judge_batch(...)` also works
+- `judge_batch`/`judgeBatch` item keys are strings in both runtimes: `drain()` tuples, `item.key`, and the `results()`/`failed()` dict keys agree for list-form states, whose indices were numbers in `drain()` and strings in `results()`.
+- `judge_batch`/`judgeBatch` `drain()` no longer raises `judge_batch cancelled` for a cancelled run that still met `min_ok`; `cancel()` stops further dispatch (in-flight items finish, unstarted ones settle as `cancelled`).
+- `judge_batch`/`judgeBatch` `status().elapsedS` freezes when the run settles instead of reporting time since start.
 - Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
 - The `Python tool bridge listening` line is now durable (info-level) and the stop is logged too, so an unreachable bridge is diagnosable from the session log.
 
@@ -76,6 +81,34 @@
 - Renaming a session from `/resume` accepts keyboard input again and returns focus to the picker after saving or cancelling ([#20548](https://github.com/can1357/oh-my-pi/issues/20548)).
 - Custom composer shapes can add blank rows above the input and keep the caret on the text row ([#20532](https://github.com/can1357/oh-my-pi/issues/20532)).
 - Fixed ACP and RPC `/mcp` commands to respect project-server precedence, enable/disable overrides, and the session working directory. ([#20499](https://github.com/can1357/oh-my-pi/pull/20499) by [@eggpeat](https://github.com/eggpeat))
+- `judge()`/`judgeBatch()` questions accept a list of `{id, ...question}` entries keyed on the embedded id, and a wrong shape fails with a message stating the expected one instead of an opaque kernel TypeError
+- Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
+- Tern no longer loses the tray's dots when the working line above the composer comes and goes: the line stays one row instead of turning into an empty column while idle
+- In the bash tool on macOS, `ls -lT` shows full timestamps instead of failing with `invalid tab size`, `uptime` prints macOS's format, and `chmod +a` and the other ACL forms run `/bin/chmod`.
+- The bash tool's `top -l` now reports load averages, user/sys/idle CPU and usernames, and `ps` shows start and elapsed times for other users' processes such as pid 1.
+- In the bash tool, `$!` after a lone `sleep`, `yes`, `nohup` or `timeout … &` is now a real pid that `ps`, `sample` and other programs can use.
+- The bash tool's `sed` and `grep` now handle POSIX bracket expressions such as `[][.]` and `[.[]`, and `sed` passes invalid UTF-8 bytes through instead of failing with `stream did not contain valid UTF-8`.
+- The bash tool's `find -newermt` (and `-newerat`/`-newerct`/`-newerBt`) now accepts relative dates such as `10 minutes ago`, `-10 minutes` and `yesterday`, like `date -d`.
+- On macOS, the bash tool's `rm -rf` now removes iCloud placeholder (dataless) folders instead of failing with `Directory not empty`, and `du` reports them the way macOS `du` does.
+- OpenRouter's 402 "would exceed your available credits given your current in-flight requests" now auto-retries after the provider's `retry-after-ms` instead of stopping the turn as an out-of-credit error.
+- A `set -e` in one bash tool call no longer stays on for later calls, where the first failing command silently skipped the rest of an unrelated call.
+- A bash tool call that ends after a `cd` or with `set -e` on now says so in its result (`Reset before the next call: cwd → …, set -e off.`), so the agent no longer assumes either carries over.
+- `!command` values in `models.yml` (`apiKey`, `headers`) can now read variables defined in `~/.env` or `~/.omp/agent/.env` on macOS and Windows; previously the command saw an empty value.
+- The bash tool's visualization now draws a script run by `bash file.sh`, `source`, or `eval "$var"` as one block under the command that ran it, instead of repeating a “built at runtime” header above every line of the script.
+- Fixed `RpcClient.onSessionEvent` silently dropping the `config_warnings_changed`, `advisor_cost_changed`, and `advisor_yielded` session events emitted over RPC ([#20254](https://github.com/can1357/oh-my-pi/pull/20254) by [@eggpeat](https://github.com/eggpeat))
+- Streamable HTTP MCP servers that answer only the 2025-11-25 handshake connect again in `/mcp test` instead of failing with HTTP 400 ([#20185](https://github.com/can1357/oh-my-pi/issues/20185), [#20208](https://github.com/can1357/oh-my-pi/pull/20208) by [@JamieJ5926](https://github.com/JamieJ5926))
+- `/live` speaks the agent's answer to a delegated request as soon as the agent finishes its turn, instead of staying silent on "working" until every subagent and background job it started has finished ([#20181](https://github.com/can1357/oh-my-pi/pull/20181) by [@aciceri](https://github.com/aciceri))
+- Models discovered by extensions retain their advertised extended context window, including after a cached catalog reload ([#20228](https://github.com/can1357/oh-my-pi/pull/20228) by [@jiwangyihao](https://github.com/jiwangyihao))
+- Truncated `ast_grep` results now report the exact next page offset (`narrow path or use skip=N for the next page`) in the model text and the TUI, instead of the generic "use skip" hint; older recorded results keep the generic hint ([#20203](https://github.com/can1357/oh-my-pi/pull/20203) by [@MikeeI](https://github.com/MikeeI))
+- Clicking any row of a wrapped MCP OAuth `Copy URL:` link now opens the whole authorization URL instead of just that row's fragment ([#20192](https://github.com/can1357/oh-my-pi/issues/20192))
+- `pi.getAllTools()` now reports the host's `propose`, `resolve`, `reject` and `report_issue` tools as `source: "builtin"` instead of `"extension"` when tool commands are enabled ([#20180](https://github.com/can1357/oh-my-pi/issues/20180))
+- `omp --help` lists `acp` among the `--mode` values, and the CLI reference documents `--no-judge`, `--no-spotlight` and `--offline` ([#20200](https://github.com/can1357/oh-my-pi/pull/20200) by [@Dangerboi](https://github.com/Dangerboi))
+- Selective commit drafts convert a file over 4 MiB alone instead of together with other dirty files, and convert the other dirty files in chunks of at most 16 files and 4 MiB ([#20176](https://github.com/can1357/oh-my-pi/issues/20176), [#20210](https://github.com/can1357/oh-my-pi/pull/20210) by [@JamieJ5926](https://github.com/JamieJ5926))
+- LSP servers that never report progress (pyright, ty, ruff, typescript-language-server) no longer delay the first diagnostics by 15 s; their project load ends 2 s after the first opened file or a workspace-folder add ([#20204](https://github.com/can1357/oh-my-pi/pull/20204) by [@MikeeI](https://github.com/MikeeI))
+- With an aliased typescript install (`typescript` → an API-only package, `.bin/tsc` → another), `typescript-language-server` now falls back to the tsserver of the package behind the resolved `tsc` instead of exiting at initialize; a workspace TypeScript with its own `lib/tsserver.js` or an explicitly configured `tsserver.fallbackPath` still wins ([#20202](https://github.com/can1357/oh-my-pi/pull/20202) by [@MikeeI](https://github.com/MikeeI))
+- Fixed the batch `task` tool rejecting a JSON-string `tasks` payload with a misleading "Missing `tasks`" error; promoted payloads now also have their double-encoded item prose repaired ([#20190](https://github.com/can1357/oh-my-pi/pull/20190) by [@arfoux](https://github.com/arfoux))
+- Claude Code plugin skills, commands and agents now resolve `${CLAUDE_PLUGIN_ROOT}` / `${OMP_PLUGIN_ROOT}` in their Markdown bodies, so plugins that point at bundled scripts work ([#20165](https://github.com/can1357/oh-my-pi/issues/20165), [#20186](https://github.com/can1357/oh-my-pi/pull/20186) by [@koeria](https://github.com/koeria))
+- `omp -e <path>` keeps the instant first frame, so a slow terminal reply no longer switches the keyboard protocol after keys were typed ([#20158](https://github.com/can1357/oh-my-pi/issues/20158), [#20193](https://github.com/can1357/oh-my-pi/pull/20193) by [@koeria](https://github.com/koeria))
 
 ### Removed
 

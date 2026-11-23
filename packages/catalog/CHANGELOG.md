@@ -25,6 +25,18 @@
 - Removed StepFun's `dr-search-api` web-search SKU from chat-model listings.
 - Updated Devin and Cursor pricing and usage accounting for image tokens and long-context GPT-5.6 models to match their published rates and limits.
 - Repeated provider resolution reuses bundled model fingerprints instead of serializing the same catalog rows again.
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models (e.g. `vercel-ai-gateway/typesafe-ai/jev`); the catalog supplies their `/v1/evaluate` judgment defaults at build time, so no user config is needed ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added `Model.judgment` (`JudgmentConfig`: `route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) declaring per-model System One judgment endpoint overrides, honored for custom providers and `modelOverrides` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added GLM-5.4 to the Zhipu Coding Plan with image input and 1M context, gave it the low/high/max thinking ladder on every host, and preferred it over GLM-5.3 for the `slow` role
+- Added `fetchOpenRouterChatModels()` and `OPENROUTER_BASE_URL` to `@oh-my-pi/pi-catalog/provider-models/openai-compat` for reading OpenRouter's tool-capable chat roster outside the `openrouter` provider.
+- `toolSchemaFlavor: "google"` rewrites OpenAI-compatible tool schemas into Gemini's dialect; GitHub Copilot Gemini models use it ([#20198](https://github.com/can1357/oh-my-pi/issues/20198))
+
+### Fixed
+
+- Fixed catalog generation baking capability-less discovery rows (e.g. Munito's `/models` entries) with the provisional effort ladder instead of the reviewed provider ladder once reasoning capability is known.
+- Fixed requests to Bedrock's Kimi K3.1 Pro Highspeed profiles failing with "The task request was rejected by the target"; requests now ask for 131,072 output tokens instead of the full context window ([#20240](https://github.com/can1357/oh-my-pi/pull/20240) by [@alblez](https://github.com/alblez))
+- Fixed Claude Opus 4.8+, Sonnet 5.5, Haiku 5.5, and Fable/Mythos 5 on Google Vertex failing every turn with a 400 (`Input tag 'tool_removal'`) after the active tool set changed mid-session ([#20275](https://github.com/can1357/oh-my-pi/issues/20275))
+- Added OpenCode's free `jev-1.13-free` judge to OpenCode Go; the `judge` role now prefers it on OpenCode Go and Zen logins over OpenRouter's paid Jev and chat models, falling back to Zen's `jev-1.14`
 
 ### Fixed
 
