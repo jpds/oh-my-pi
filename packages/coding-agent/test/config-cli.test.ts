@@ -7,6 +7,7 @@ import { getConfigRootDir, getProjectDir, setAgentDir, setProjectDir, TempDir } 
 
 let testAgentDir: TempDir | undefined;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalDeclarativeFiles = process.env.PI_CONFIG_DECLARATIVE_FILES;
 const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
 const cliEntry = path.join(import.meta.dir, "..", "src", "cli.ts");
 
@@ -30,6 +31,10 @@ async function runCliProcess(args: string[], env: NodeJS.ProcessEnv): Promise<Cl
 
 beforeEach(() => {
 	resetSettingsForTest();
+	// A harness shell exports its own declarative family (the nix config on this machine);
+	// the temp agent dir below is the only config a test should resolve.
+	delete process.env.PI_CONFIG_DECLARATIVE_FILES;
+	delete Bun.env.PI_CONFIG_DECLARATIVE_FILES;
 	testAgentDir = TempDir.createSync("@omp-config-cli-");
 	setAgentDir(testAgentDir.path());
 });
@@ -43,6 +48,13 @@ afterEach(async () => {
 	} else {
 		setAgentDir(fallbackAgentDir);
 		delete process.env.PI_CODING_AGENT_DIR;
+	}
+	if (originalDeclarativeFiles === undefined) {
+		delete process.env.PI_CONFIG_DECLARATIVE_FILES;
+		delete Bun.env.PI_CONFIG_DECLARATIVE_FILES;
+	} else {
+		process.env.PI_CONFIG_DECLARATIVE_FILES = originalDeclarativeFiles;
+		Bun.env.PI_CONFIG_DECLARATIVE_FILES = originalDeclarativeFiles;
 	}
 	if (testAgentDir) {
 		try {
