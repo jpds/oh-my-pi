@@ -955,6 +955,12 @@ export interface TspPrefsRow {
 	warning?: string;
 	/** Differs from the default. */
 	changed?: boolean;
+	/**
+	 * The machine's declarative settings layer supplies the displayed value, so the row is
+	 * painted apart from both the changed and the selected styling: a baked-in value is not
+	 * an edit the user made.
+	 */
+	declared?: boolean;
 	/** Default shown in the changed dot's title. */
 	defaultLabel?: string;
 	disabled?: string;

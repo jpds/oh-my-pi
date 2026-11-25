@@ -159,6 +159,8 @@ interface Item {
 	/** Values Enter cycles through (booleans, plain enums). */
 	readonly cycle?: readonly string[];
 	readonly changed?: boolean;
+	/** The declarative layer supplies the shown value: painted apart from user edits. */
+	readonly declared?: boolean;
 	readonly defaultLabel?: string;
 	/** Search results: the page of the row. */
 	readonly page?: SettingTab;
@@ -376,6 +378,7 @@ export function SettingsWindow(props: {
 			description: def.description,
 			warning: def.warning,
 			changed,
+			declared: settings.declared?.(def.path) === true ? true : undefined,
 			defaultLabel: changed ? defaultLabel(def) : undefined,
 		};
 		switch (def.type) {
@@ -1141,6 +1144,7 @@ export function SettingsWindow(props: {
 			hint: item.description ? line(item.description) : undefined,
 			warning: item.warning ? line(item.warning) : undefined,
 			changed: item.changed === true ? true : undefined,
+			declared: item.declared === true ? true : undefined,
 			defaultLabel: item.changed && item.defaultLabel ? line(item.defaultLabel) : undefined,
 			control: typed,
 		};

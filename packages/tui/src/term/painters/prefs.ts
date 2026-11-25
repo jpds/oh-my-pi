@@ -292,6 +292,8 @@ export interface SettingRowLook {
 	readonly heading?: boolean;
 	readonly warning?: boolean;
 	readonly changed?: boolean;
+	/** The declarative layer supplies the value: painted apart from changed/selected rows. */
+	readonly declared?: boolean;
 	readonly selected: boolean;
 	/** Width of the label column (labels padded to it). */
 	readonly labelWidth: number;
@@ -325,16 +327,21 @@ export function settingRow(theme: Theme, row: SettingRowLook): string {
 		const text = theme.fg("dim", truncate(`  ${plainLabel}${pad}  ${value}`, Math.max(0, row.width)));
 		return hovered ? theme.bg("selectedBg", text) : text;
 	}
-	const label = row.changed
-		? theme.fg("statusLineGitDirty", row.label)
-		: row.selected
-			? theme.fg("accent", row.label)
-			: row.label;
-	const valueText = row.changed
-		? theme.fg("statusLineGitDirty", value)
-		: row.selected
-			? theme.fg("accent", value)
-			: theme.fg("muted", value);
+	const declaredColor = row.declared === true ? "statusLineGitClean" : undefined;
+	const label = declaredColor
+		? theme.fg(declaredColor, row.label)
+		: row.changed
+			? theme.fg("statusLineGitDirty", row.label)
+			: row.selected
+				? theme.fg("accent", row.label)
+				: row.label;
+	const valueText = declaredColor
+		? theme.fg(declaredColor, value)
+		: row.changed
+			? theme.fg("statusLineGitDirty", value)
+			: row.selected
+				? theme.fg("accent", value)
+				: theme.fg("muted", value);
 	const text = truncate(
 		`${prefix}${label}${mark ? theme.fg("warning", mark) : ""}${pad}  ${valueText}`,
 		Math.max(0, row.width),
@@ -362,6 +369,7 @@ function itemRow(
 		heading: item.heading,
 		warning: !item.heading && item.row!.warning !== undefined && item.row!.warning !== "",
 		changed: item.row?.changed === true,
+		declared: item.row?.declared === true,
 	});
 }
 
