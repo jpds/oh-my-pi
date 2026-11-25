@@ -44,6 +44,7 @@ import type { ThreadId } from "../identity";
 import type { WorkerThreadLink } from "../protocol";
 import { RpcClosedError, type RpcMethod, type RpcServe } from "../rpc";
 import type { ThreadService, WorkerPeer } from "../services";
+import { AGENT_STORAGE_KIND } from "./runtime-remote";
 
 /** Worker-side receiver of main-instance states; returns `false` once its mirror was collected. */
 export type SettingsMirrorListener = (state: SettingsMirrorState) => boolean | Promise<boolean>;
@@ -211,7 +212,10 @@ function runRefresh(target: Settings, refresh: SettingsMirrorRefresh): Promise<v
 }
 
 /** Main-side implementation of {@link SettingsMirrorProtocol} for one worker. */
-function serveSettings(subscriptions: Set<() => void>): RpcServe<Settings, SettingsMirrorProtocol> {
+function serveSettings(
+	subscriptions: Set<() => void>,
+	carriesStorage: () => boolean,
+): RpcServe<Settings, SettingsMirrorProtocol> {
 	return {
 		attach: (target, listener) => {
 			const stop = (): void => {
@@ -224,7 +228,13 @@ function serveSettings(subscriptions: Set<() => void>): RpcServe<Settings, Setti
 				}),
 			);
 			subscriptions.add(stop);
-			return { state: target.mirrorState(), parent: target.overlayParent() ?? null, storage: target.getStorage() };
+			return {
+				state: target.mirrorState(),
+				parent: target.overlayParent() ?? null,
+				// A link without the runtime service cannot carry the handle; the mirror then
+				// keeps its parent's storage (or none), as it does for an instance that has none.
+				storage: carriesStorage() ? target.getStorage() : null,
+			};
 		},
 		write: (target, write) => {
 			replayWrite(target, write);
@@ -339,7 +349,7 @@ export const settingsThreadService: ThreadService = {
 		peer.link.exportClass<Settings, SettingsMirrorProtocol>(
 			KIND,
 			(value): value is Settings => value instanceof Settings,
-			serveSettings(subscriptionsOf(peer.threadId)),
+			serveSettings(subscriptionsOf(peer.threadId), () => peer.link.hasExportClass(AGENT_STORAGE_KIND)),
 		);
 	},
 	globals: mainGlobals,

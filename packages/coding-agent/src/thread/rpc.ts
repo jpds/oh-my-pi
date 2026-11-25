@@ -443,6 +443,11 @@ export class RpcLink<Local extends RpcApi, Remote extends RpcApi> {
 		this.#importedClasses.set(kind, create);
 	}
 
+	/** Whether THIS side exports `kind`, i.e. the other side can receive such instances by reference. */
+	hasExportClass(kind: string): boolean {
+		return this.#exportedClasses.has(kind);
+	}
+
 	/** Call `method` on the other side. Rejects with the remote error, or {@link RpcClosedError}. */
 	call<K extends keyof Remote & string>(method: K, ...args: Remote[K]["args"]): Promise<Remote[K]["result"]> {
 		const { promise, resolve, reject } = Promise.withResolvers<Remote[K]["result"]>();

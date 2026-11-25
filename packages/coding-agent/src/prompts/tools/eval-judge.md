@@ -21,7 +21,7 @@ await judge(state, questions, { images?: [path | ImageContent, …] }) → `{id:
     Typed judgment over one `state` (non-empty {{#if py}}str{{else}}string{{/if}} | JSON object | JSON array).
     - Every question sees the same state and is answered independently: batch independent questions into one call.
     - Cheap and fast (TypeSafe when credentialed, else the tiny/smol chat model); prefer over `completion()` for classification, yes/no, ranking.
-    - Two or more states → `{{#if py}}judge_batch{{else}}judgeBatch{{/if}}`, never a loop of `judge()`.
+    - Two or more states → {{#if py}}`judge_batch`{{/if}}{{#if js}}{{#if py}} (Python) / {{/if}}`judgeBatch`{{#if py}} (JS){{/if}}{{/if}}, never a loop of `judge()`.
     `questions`: `{id: q}` — or a list of `{id, ...q}` entries keyed on the embedded id — where q is one of
       `{type: "choice", instructions, criteria: {label: rubric | {{#if py}}None{{else}}null{{/if}}, …}}` → `{choice, probabilities: {label: p}, confidence}` (≥2 labels)
       `{type: "bool", instructions, criteria?: {true?: {{#if py}}str{{else}}string{{/if}}, false?: {{#if py}}str{{else}}string{{/if}}}}` → `{bool: P(yes)}`
@@ -55,7 +55,7 @@ await judgeBatch(states, questions, { intent?, concurrency?, retries?, minOk?, i
 {{#if waitTool}}
     - the `wait` tool (not kernel `wait()`) blocks when you have nothing else to do
 {{/if}}
-    - `{{#if py}}judge_batch.attach(id){{else}}await judgeBatch.attach(id){{/if}}` re-creates the ref after a reset.
+    - `{{#if py}}judge_batch.attach(id){{/if}}{{#if js}}{{#if py}} (Python) / {{/if}}await judgeBatch.attach(id){{#if py}} (JS){{/if}}{{/if}}` re-creates the ref after a reset.
 {{#ifAll py js}}
     JS: ONE trailing object — `b = await judgeBatch(states, questions, { intent, concurrency, retries, minOk, images })`.
     - `await` every `b` method except `drainIter`, which you iterate with `for await (const [k, item] of b.drainIter({ timeout }))`.

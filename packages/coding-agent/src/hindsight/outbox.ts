@@ -29,6 +29,8 @@ export interface OutboxEvent {
 	version: 1;
 	/** Also the server `document_id`, so a resend replaces instead of duplicating. */
 	id: string;
+	/** Position within its tool call; events published in the same instant deliver in this order. */
+	sequence?: number;
 	scope: MemoryWriteScope;
 	tags: string[];
 	timestamp: string;
@@ -69,8 +71,8 @@ export interface HindsightOutboxOptions {
 interface Pending {
 	file: string;
 	event: OutboxEvent;
-	/** Publication time (mtime); delivery follows it. */
-	published: number;
+	/** Publication time (`mtimeNs`); delivery follows it. */
+	published: bigint;
 }
 
 type SendOutcome = "accepted" | "rejected" | { error: string };
@@ -182,6 +184,7 @@ export class HindsightOutbox {
 		return {
 			version: 1,
 			id: `omp-retain-${new Bun.CryptoHasher("sha256").update(identity).digest("hex").slice(0, 32)}`,
+			sequence: index,
 			scope,
 			tags: scope === "global" ? [] : (call.tags ?? []).map(tag => this.#clean(tag)),
 			timestamp: new Date().toISOString(),
@@ -224,7 +227,7 @@ export class HindsightOutbox {
 		// Hindsight unions a request's item tags onto its document(s): one request per tag set, so
 		// untagged global memories never share a request with project-tagged ones.
 		const groups = new Map<string, Pending[]>();
-		for (const entry of pending.sort((a, b) => a.published - b.published)) {
+		for (const entry of pending.sort(comparePending)) {
 			const key = JSON.stringify(entry.event.tags.toSorted());
 			const group = groups.get(key);
 			if (group) group.push(entry);
@@ -344,6 +347,16 @@ function eventFile(id: string): string {
 	return `${id}.json`;
 }
 
+/**
+ * Delivery order: publication time (nanoseconds, so the files one tool call writes stay
+ * in call order even on filesystems with coarse timestamps), then the enqueue position
+ * for events that share an instant.
+ */
+function comparePending(a: Pending, b: Pending): number {
+	if (a.published !== b.published) return a.published < b.published ? -1 : 1;
+	return (a.event.sequence ?? 0) - (b.event.sequence ?? 0);
+}
+
 async function eventFiles(dir: string): Promise<string[]> {
 	return (await fs.readdir(dir)).filter(name => EVENT_FILE.test(name));
 }
@@ -357,13 +370,14 @@ function destinationKey(apiUrl: string, bankId: string): string {
 
 /** The pending event, or `undefined` when it is malformed or past its TTL. */
 async function readEvent(file: string, now: number): Promise<Pending | undefined> {
-	const published = (await fs.stat(file)).mtimeMs;
-	if (published < now - EVENT_TTL_MS) return undefined;
+	const published = (await fs.stat(file, { bigint: true })).mtimeNs;
+	if (published < BigInt(Math.trunc(now - EVENT_TTL_MS)) * 1_000_000n) return undefined;
 	try {
 		const event = (await Bun.file(file).json()) as OutboxEvent;
 		const valid =
 			event.version === 1 &&
 			eventFile(event.id) === path.basename(file) &&
+			(event.sequence === undefined || Number.isInteger(event.sequence)) &&
 			(event.scope === "project" || event.scope === "global") &&
 			Array.isArray(event.tags) &&
 			event.tags.every(tag => typeof tag === "string") &&
