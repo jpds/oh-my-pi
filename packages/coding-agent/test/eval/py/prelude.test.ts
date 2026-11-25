@@ -2,6 +2,21 @@ import { describe, expect, it } from "bun:test";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { runPrelude } from "./run-prelude";
 
+/**
+ * The kernel helper now returns stdout (and throws on failure); the judgment
+ * tests below were written against the earlier structured result, so adapt.
+ */
+async function runPreludeResult(
+	code: string,
+	env: Record<string, string>,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	try {
+		return { exitCode: 0, stdout: await runPrelude(code, env), stderr: "" };
+	} catch (error) {
+		return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 describe("python prelude", () => {
 	it("infers eval tool schemas and replaces definitions by name", async () => {
 		const result = await runPrelude(
@@ -284,7 +299,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		});
 
 		try {
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					'    answers = await judge("hello", {',
@@ -322,6 +337,68 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		}
 	});
 
+	it("applies the model's judgment maps to the direct wire and answers", async () => {
+		const requests: { url: string; body: unknown }[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: async request => {
+				requests.push({ url: new URL(request.url).pathname, body: await request.json() });
+				return Response.json({
+					model: "typesafe-ai/jev",
+					answers: { ok: { type: "boolean", probability: 0.75 } },
+					usage: { inputTokens: 4, outputTokens: 2 },
+				});
+			},
+		});
+
+		try {
+			const withMaps = JSON.stringify({
+				api: "typesafe",
+				route: "/v1/evaluate",
+				provider: "vercel-ai-gateway",
+				model: "typesafe-ai/jev",
+				baseUrl: server.url.toString(),
+				apiKey: "gw-key",
+				judgment: {
+					route: "/v1/evaluate",
+					typeMap: { noul: "boolean" },
+					valueMap: { noul: "probability" },
+					usageMap: { input: "inputTokens", output: "outputTokens" },
+				},
+			});
+			const result = await runPreludeResult(
+				[
+					"async def main():",
+					'    answers = await judge("hello", {',
+					'        "ok": {"type": "bool", "instructions": "fake?", "criteria": {"true": "yes", "false": "no"}},',
+					"    })",
+					"    print(json.dumps(answers, sort_keys=True))",
+					"asyncio.run(main())",
+				].join("\n"),
+				{ PI_JUDGE_DIRECT: withMaps },
+			);
+
+			expect(result.stderr).toBe("");
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.stdout.trim())).toEqual({ ok: { type: "bool", bool: 0.75 } });
+			expect(requests).toEqual([
+				{
+					url: "/v1/evaluate",
+					body: {
+						state: "hello",
+						model: "typesafe-ai/jev",
+						questions: {
+							ok: { type: "boolean", instructions: "fake?", criteria: { true: "yes", false: "no" } },
+						},
+					},
+				},
+			]);
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	it("judge_batch() runs kernel-local with per-item retry, drain cursor, and attach", async () => {
 		const attempts: string[] = [];
 		const server = Bun.serve({
@@ -345,7 +422,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		});
 
 		try {
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					'    b = judge_batch({"x": "hello", "y": "world"}, {"q": {"type": "bool", "instructions": "non-empty?"}}, retries=2)',
@@ -379,7 +456,10 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 			expect(value).toEqual({
 				ok_keys: ["x"],
 				failed_keys: ["y"],
-				results: { x: { q: { type: "bool", bool: 1 } } },
+				results: {
+					x: { key: "x", answers: { q: { type: "bool", bool: 1 } }, model: "typesafe/jev-preview", error: null },
+					y: { key: "y", answers: null, error: expect.stringContaining("API error (500)"), model: null },
+				},
 				done: 2,
 				failed: 1,
 				total: 2,
@@ -399,7 +479,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		});
 
 		try {
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					'    b = judge_batch({"x": "hello"}, {"q": {"type": "bool", "instructions": "non-empty?"}}, retries=0, min_ok=1)',
@@ -450,7 +530,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		});
 
 		try {
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					"    errors = []",
@@ -482,7 +562,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 	});
 
 	it("surfaces a typed error when the bridge endpoint is unreachable", async () => {
-		const result = await runPrelude(
+		const result = await runPreludeResult(
 			[
 				"async def main():",
 				"    try:",
@@ -503,5 +583,90 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		expect(result.stdout).toContain("eval tool bridge unreachable at http://127.0.0.1:1");
 		expect(result.stdout).toContain("'test-session'");
 		expect(result.stdout).not.toContain("Traceback");
+	});
+});
+
+describe("python judge question normalization", () => {
+	it("accepts list-form questions keyed on their embedded id and rejects malformed entries", async () => {
+		const result = await runPreludeResult(
+			[
+				"normalized = _judge_questions([",
+				'    {"id": "a", "type": "bool", "instructions": "x"},',
+				'    {"id": "b", "type": "score", "instructions": "y", "criteria": ["low", "high"]},',
+				"])",
+				"passthrough = _judge_questions({'c': {'type': 'bool', 'instructions': 'z'}})",
+				"async def main():",
+				"    errors = []",
+				"    for questions in (",
+				'        [{"type": "bool", "instructions": "x"}],',
+				'        [{"id": "a", "type": "bool", "instructions": "x"}, {"id": "a", "type": "bool", "instructions": "y"}],',
+				"        [],",
+				'        "tests",',
+				"    ):",
+				"        try:",
+				'            await judge("hello", questions)',
+				'            errors.append("no-error")',
+				"        except TypeError as exc:",
+				"            errors.append(str(exc))",
+				'    print(json.dumps({"normalized": normalized, "passthrough": passthrough, "errors": errors}, sort_keys=True))',
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+		);
+
+		expect(result.stderr).toBe("");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.stdout.trim())).toEqual({
+			normalized: {
+				a: { type: "bool", instructions: "x" },
+				b: { type: "score", instructions: "y", criteria: ["low", "high"] },
+			},
+			passthrough: { c: { type: "bool", instructions: "z" } },
+			errors: [
+				'question entry 0 must carry a non-empty string "id" (or pass questions as a dict keyed by id)',
+				'duplicate question id "a"',
+				"judge() received invalid arguments: questions must contain at least one question",
+				"judge questions must be a dict keyed by id ({q_best: {...}}) or a list of {\"id\": ..., ...question} entries (got str)",
+			],
+		});
+	});
+
+	it("names the calling helper when a host-mediated helper lacks the bridge", async () => {
+		const result = await runPreludeResult(
+			[
+				"async def main():",
+				"    errors = []",
+				"    async def label(call):",
+				"        try:",
+				"            await call()",
+				'            errors.append("no-error")',
+				"        except RuntimeError as exc:",
+				'            errors.append(str(exc).split(" cannot run:")[0])',
+				'    await label(lambda: tool.read({"path": "x"}))',
+				'    await label(lambda: _omp_prelude("omp_find", {}))',
+				'    await label(lambda: wait([_Handle("missing")], timeout=0))',
+				"    for start in (lambda: completion('hi'), lambda: agent('hi')):",
+				"        try:",
+				"            start()",
+				'            errors.append("no-error")',
+				"        except RuntimeError as exc:",
+				'            errors.append(str(exc).split(" cannot run:")[0])',
+				"    print(json.dumps(errors))",
+				"",
+				"asyncio.run(main())",
+			].join("\n"),
+			{},
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		// Each surface reports the helper the cell actually called, not a generic bridge error.
+		expect(JSON.parse(result.stdout.trim())).toEqual([
+			"tool.read(...)",
+			"omp_find() prelude helper",
+			"wait()",
+			"completion()",
+			"agent()",
+		]);
 	});
 });
