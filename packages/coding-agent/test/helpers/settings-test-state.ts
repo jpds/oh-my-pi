@@ -22,6 +22,10 @@ export function beginSettingsTest(): SettingsTestState {
 		projectDir: getProjectDir(),
 	};
 	resetSettingsForTest();
+	// Harness shells export their own declarative family (e.g. the nix `omp-config.yml`);
+	// a test resolves config from the temp dirs it creates, so hide the host's family while
+	// it runs. `restoreEnv` puts it back from the snapshot above.
+	restoreEnvValue("PI_CONFIG_DECLARATIVE_FILES", undefined);
 	return state;
 }
 
