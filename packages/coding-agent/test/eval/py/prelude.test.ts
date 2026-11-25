@@ -2,6 +2,21 @@ import { describe, expect, it } from "bun:test";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { runPrelude } from "./run-prelude";
 
+/**
+ * The kernel helper now returns stdout (and throws on failure); the judgment
+ * tests below were written against the earlier structured result, so adapt.
+ */
+async function runPreludeResult(
+	code: string,
+	env: Record<string, string>,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	try {
+		return { exitCode: 0, stdout: await runPrelude(code, env), stderr: "" };
+	} catch (error) {
+		return { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 describe("python prelude", () => {
 	it("infers eval tool schemas and replaces definitions by name", async () => {
 		const result = await runPrelude(
@@ -284,7 +299,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		});
 
 		try {
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					'    answers = await judge("hello", {',
@@ -352,7 +367,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 					usageMap: { input: "inputTokens", output: "outputTokens" },
 				},
 			});
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					'    answers = await judge("hello", {',
@@ -407,7 +422,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		});
 
 		try {
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					'    b = judge_batch({"x": "hello", "y": "world"}, {"q": {"type": "bool", "instructions": "non-empty?"}}, retries=2)',
@@ -464,7 +479,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		});
 
 		try {
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					'    b = judge_batch({"x": "hello"}, {"q": {"type": "bool", "instructions": "non-empty?"}}, retries=0, min_ok=1)',
@@ -515,7 +530,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 		});
 
 		try {
-			const result = await runPrelude(
+			const result = await runPreludeResult(
 				[
 					"async def main():",
 					"    errors = []",
@@ -547,7 +562,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 	});
 
 	it("surfaces a typed error when the bridge endpoint is unreachable", async () => {
-		const result = await runPrelude(
+		const result = await runPreludeResult(
 			[
 				"async def main():",
 				"    try:",
@@ -573,7 +588,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 
 describe("python judge question normalization", () => {
 	it("accepts list-form questions keyed on their embedded id and rejects malformed entries", async () => {
-		const result = await runPrelude(
+		const result = await runPreludeResult(
 			[
 				"normalized = _judge_questions([",
 				'    {"id": "a", "type": "bool", "instructions": "x"},',
@@ -617,7 +632,7 @@ describe("python judge question normalization", () => {
 	});
 
 	it("names the calling helper when a host-mediated helper lacks the bridge", async () => {
-		const result = await runPrelude(
+		const result = await runPreludeResult(
 			[
 				"async def main():",
 				"    errors = []",
