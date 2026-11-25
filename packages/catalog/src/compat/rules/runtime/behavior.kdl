@@ -25,7 +25,9 @@ behavior {
 	// controls; matching them by bare model id contaminates unrelated proxy
 	// models (a LiteLLM proxy serving `glm-5.3-flash`), so its rows are barred
 	// from seeding cross-provider bare-id enrichment references (#10932).
-	reference-isolated-providers "cline-pass"
+	// Munito's $0 reseller rows would outrank priced Nvidia/Kilo/Novita
+	// references for the same canonical ids.
+	reference-isolated-providers "cline-pass" "munito"
 
 	// These hosts reuse an unchanged message prefix across turns; history
 	// rewrites otherwise discard their warm prompt cache.
@@ -198,12 +200,15 @@ behavior {
 	exclude-models provider="otari" substring="embed" substring="rerank" substring="-tts" substring="transcribe" \
 		substring="realtime" substring="minilm" substring="mpnet" substring="/bge-" substring="/e5-" substring="/flux-" \
 		prefix="openai/gpt-image-" prefix="alibaba/qwen-image"
-	// Bifrost lists every model of every configured upstream, including
+	// Bifrost lists every model of every upstream, including
 	// embedding, speech, transcription, and image models. Rows with metadata are
 	// filtered on `architecture.output_modalities` in the mapper; these catch
 	// metadata-less non-chat rows behind the `<bifrost-provider>/` prefix.
 	exclude-models provider="bifrost" substring="embed" substring="rerank" substring="-tts" substring="transcribe" \
 		substring="whisper" substring="realtime" substring="/dall-e" substring="/gpt-image-" substring="moderation"
+	// Munito's OCR SKUs only serve the document API, not chat.
+	exclude-models provider="munito" exact="munito/ocr-auto" exact="munito/ocr-fast" \
+		exact="lightonai/lightonocr-2-1b"
 	// SuperGrok's roster interleaves media models the chat picker cannot
 	// serve; the dedicated tool surfaces route them instead.
 	exclude-models provider="xai-oauth" exact="grok-imagine-image-quality" exact="grok-imagine-image-2.0" \

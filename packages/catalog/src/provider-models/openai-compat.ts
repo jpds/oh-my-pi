@@ -588,6 +588,43 @@ function nanoGptPricingCost(pricing: unknown, fallback: TokenCost): TokenCost {
 	};
 }
 
+/**
+ * Canonical-reference recovery for resellers whose `/models` rows carry only
+ * `id`/`owned_by`: an id bundled on the discovering provider hydrates through
+ * {@link mapWithBundledReference}; anything else recovers intrinsic
+ * capabilities (context window, output limit, reasoning, thinking) from the
+ * bundled canonical reference index (`recover-canonical-params` providers).
+ * Identity, pricing, compat, and routes are never borrowed: a host with no
+ * per-model tariff stays zeroed.
+ */
+export function mapCanonicalReferenceModel<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	if (reference) {
+		return mapWithBundledReference(entry, defaults, reference);
+	}
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as ModelSpec<TApi> | undefined;
+	if (!canonical) {
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	}
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		...(canonical.thinking && { thinking: canonical.thinking }),
+		contextWindow,
+		maxTokens,
+	};
+}
+
 function normalizeAnthropicBaseUrl(baseUrl: string | undefined, fallback: string): string {
 	const value = baseUrl?.trim();
 	if (!value) {
@@ -828,6 +865,7 @@ type OpenAICompatibleModelManagerBuilderOptions<TApi extends Api> = {
 	dynamicReasoningAuthoritative?: true;
 	/** Live rows are the whole truth for input modality (no OR-merge with the bundle). */
 	dynamicInputAuthoritative?: true;
+	dynamicRunnerRowsAuthoritative?: true;
 	requireApiKey?: true;
 	dropCachedModelIdsOnStaticMismatch?: readonly string[];
 	cacheProviderId?: string;
@@ -857,6 +895,7 @@ function createOpenAICompatibleModelManagerOptions<TApi extends Api>(
 		...(options.dynamicModelsAuthoritative && { dynamicModelsAuthoritative: true }),
 		...(options.dynamicReasoningAuthoritative && { dynamicReasoningAuthoritative: true }),
 		...(options.dynamicInputAuthoritative && { dynamicInputAuthoritative: true }),
+		...(options.dynamicRunnerRowsAuthoritative && { dynamicRunnerRowsAuthoritative: true }),
 		...(options.dropCachedModelIdsOnStaticMismatch && {
 			dropCachedModelIdsOnStaticMismatch: options.dropCachedModelIdsOnStaticMismatch,
 		}),
@@ -1216,50 +1255,6 @@ export interface GmiCloudModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
-/**
- * Map a discovered GMI Cloud model to a full spec.
- *
- * GMI's `/v1/models` returns only bare `{id}` rows, so discovery defaults carry
- * no limits, reasoning, or thinking metadata. When a gmi-cloud bundled
- * reference exists (the seeded default) it supplies GMI's published tariff and
- * limits directly. Every other id is an open-weight model GMI resells under its
- * canonical id (`deepseek-ai/…`, `moonshotai/…`, `zai-org/…`, `Qwen/…`), so its
- * intrinsic capabilities — context window, output limit, reasoning, thinking
- * ladder — are recovered from any bundled upstream entry via the canonical
- * reference index. Pricing is deliberately never borrowed across providers:
- * GMI's per-model tariff is unknown for these ids, so cost stays zeroed rather
- * than inheriting another provider's rate.
- */
-function mapGmiCloudModel(
-	entry: OpenAICompatibleModelRecord,
-	defaults: ModelSpec<"openai-completions">,
-	reference: ModelSpec<"openai-completions"> | undefined,
-): ModelSpec<"openai-completions"> {
-	if (reference) {
-		return mapWithBundledReference(entry, defaults, reference);
-	}
-	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as
-		| ModelSpec<"openai-completions">
-		| undefined;
-	if (!canonical) {
-		return { ...defaults, name: toModelName(entry.name, defaults.name) };
-	}
-	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
-	const maxTokens =
-		canonical.maxTokens != null && contextWindow != null
-			? Math.min(canonical.maxTokens, contextWindow)
-			: (canonical.maxTokens ?? defaults.maxTokens);
-	return {
-		...defaults,
-		name: toModelName(entry.name, canonical.name ?? defaults.name),
-		reasoning: canonical.reasoning,
-		input: canonical.input,
-		...(canonical.thinking && { thinking: canonical.thinking }),
-		contextWindow,
-		maxTokens,
-	};
-}
-
 export function gmiCloudModelManagerOptions(
 	config?: GmiCloudModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -1270,7 +1265,7 @@ export function gmiCloudModelManagerOptions(
 		cacheProviderId: resolveModelCacheProviderId("gmi-cloud"),
 		config,
 		requireApiKey: true,
-		mapModel: mapGmiCloudModel,
+		mapModel: mapCanonicalReferenceModel,
 	});
 }
 
@@ -4211,31 +4206,66 @@ function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { bas
 	};
 }
 
+// convaiinnovations/laya and laya-free are temporary promo models omitted from seeds
+// due to promo fragility (expiring 2026-10-31), but cached rows must drop on static mismatch.
+const VERCEL_AI_GATEWAY_STATIC_MODEL_IDS = [
+	...seedModels("vercel-ai-gateway").map(model => model.id),
+	"convaiinnovations/laya",
+	"convaiinnovations/laya-free",
+];
+
 export function vercelAiGatewayModelManagerOptions(
 	config?: VercelAiGatewayModelManagerConfig,
-): ModelManagerOptions<"anthropic-messages"> {
+): ModelManagerOptions<"anthropic-messages" | "typesafe"> {
 	const apiKey = config?.apiKey;
 	const { baseUrl, catalogBaseUrl } = normalizeVercelAiGatewayBaseUrls(config?.baseUrl);
-	return {
+	const options: ModelManagerOptions<"anthropic-messages" | "typesafe"> = {
 		providerId: "vercel-ai-gateway",
+		dropCachedModelIdsOnStaticMismatch: VERCEL_AI_GATEWAY_STATIC_MODEL_IDS,
 		fetchDynamicModels: () =>
-			fetchOpenAICompatibleModels({
+			fetchOpenAICompatibleModels<"anthropic-messages" | "typesafe">({
 				api: "anthropic-messages",
 				provider: "vercel-ai-gateway",
 				baseUrl: catalogBaseUrl,
 				apiKey,
 				retryWithoutApiKeyOnUnauthorized: true,
-				filterModel: (entry: OpenAICompatibleModelRecord) => {
-					const tags = entry.tags;
-					return Array.isArray(tags) && tags.includes("tool-use");
-				},
+				// Evaluation rows are the gateway's System One judge surface; chat
+				// rows without tool-use cannot serve an agent turn.
+				filterModel: (entry: OpenAICompatibleModelRecord) =>
+					entry.type === "evaluation" ||
+					(Array.isArray(entry.tags) && entry.tags.includes("tool-use")),
 				mapModel: (
 					entry: OpenAICompatibleModelRecord,
-					defaults: ModelSpec<"anthropic-messages">,
-					_context: OpenAICompatibleModelMapperContext<"anthropic-messages">,
-				): ModelSpec<"anthropic-messages"> => {
+					defaults: ModelSpec<"anthropic-messages" | "typesafe">,
+					_context: OpenAICompatibleModelMapperContext<"anthropic-messages" | "typesafe">,
+				): ModelSpec<"anthropic-messages" | "typesafe"> => {
 					const pricing = entry.pricing as Record<string, unknown> | undefined;
 					const tags = Array.isArray(entry.tags) ? (entry.tags as string[]) : [];
+					const cost = {
+						input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
+						output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
+						cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
+						cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
+					};
+
+					if (entry.type === "evaluation") {
+						const modalities = isRecord(entry.modalities) ? entry.modalities : undefined;
+						const inputModalities = Array.isArray(modalities?.input) ? modalities.input : [];
+						return {
+							...defaults,
+							api: "typesafe",
+							baseUrl,
+							kind: "judge",
+							reasoning: false,
+							input: inputModalities.includes("image") || tags.includes("vision") ? ["text", "image"] : ["text"],
+							supportsTools: false,
+							cost,
+							contextWindow:
+								typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
+							maxTokens: typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens,
+						};
+					}
+
 					const reportedMaxTokens = typeof entry.max_tokens === "number" ? entry.max_tokens : defaults.maxTokens;
 					const modelId = typeof entry.id === "string" ? entry.id : defaults.id;
 					const maxTokens =
@@ -4248,12 +4278,7 @@ export function vercelAiGatewayModelManagerOptions(
 						baseUrl,
 						reasoning: Array.isArray(entry.tags) ? tags.includes("reasoning") : defaults.reasoning,
 						input: tags.includes("vision") ? ["text", "image"] : ["text"],
-						cost: {
-							input: (toNumber(pricing?.input) ?? 0) * 1_000_000,
-							output: (toNumber(pricing?.output) ?? 0) * 1_000_000,
-							cacheRead: (toNumber(pricing?.input_cache_read) ?? 0) * 1_000_000,
-							cacheWrite: (toNumber(pricing?.input_cache_write) ?? 0) * 1_000_000,
-						},
+						cost,
 						contextWindow:
 							typeof entry.context_window === "number" ? entry.context_window : defaults.contextWindow,
 						maxTokens,
@@ -4262,6 +4287,36 @@ export function vercelAiGatewayModelManagerOptions(
 				fetch: config?.fetch,
 			}),
 	};
+	const fetchDiscovered = options.fetchDynamicModels;
+	if (!fetchDiscovered) return options;
+	return {
+		...options,
+		fetchDynamicModels: async () => {
+			// Discovery rows already carry `baseUrl` from mapModel; appended seed
+			// rows are rebased by `appendVercelGatewaySeeds` so a proxied
+			// consumer never sends its credential to the public gateway.
+			return appendVercelGatewaySeeds(await fetchDiscovered(), baseUrl);
+		},
+	};
+}
+
+/**
+ * Append every authored seed row discovery did not return and rebase it onto
+ * `baseUrl`: Vercel's judge seeds are the provider's live System One surface,
+ * so a proxied consumer must reach them through its own host instead of the
+ * public gateway the seed's catalog base names. Empty discovery stays empty —
+ * a transient outage must keep the cache non-authoritative, not seed it.
+ */
+function appendVercelGatewaySeeds<TApi extends Api>(
+	discovered: readonly ModelSpec<TApi>[] | null,
+	baseUrl: string,
+): readonly ModelSpec<TApi>[] | null {
+	if (discovered === null || discovered.length === 0) return discovered;
+	const foundIds = new Set(discovered.map(model => model.id));
+	const appended = seedModels<TApi>("vercel-ai-gateway")
+		.filter(seed => !foundIds.has(seed.id))
+		.map(seed => ({ ...seed, baseUrl, ...(seed.api === "typesafe" ? { kind: "judge" as const } : {}) }));
+	return appended.length === 0 ? discovered : [...discovered, ...appended];
 }
 
 // ---------------------------------------------------------------------------
@@ -5676,6 +5731,90 @@ export function stepfunModelManagerOptions(
 		// Must live on the manager options, not only the KDL descriptor:
 		// `createModelManager()` prunes the bundled slice from this flag.
 		dynamicModelsAuthoritative: true,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// 16.10 Munito
+// ---------------------------------------------------------------------------
+
+export interface MunitoModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/** OCR SKUs serve only the document API; `runtime/behavior.kdl` excludes them by provider. */
+export function isMunitoChatModelId(id: string): boolean {
+	const normalized = id.trim().toLowerCase();
+	if (!normalized) {
+		return false;
+	}
+	return !isExcludedModel("munito", normalized);
+}
+
+/**
+ * Munito reference recovery: `/models` rows carry only `id`/`owned_by`. An id
+ * bundled on Munito hydrates through {@link mapWithBundledReference}; anything
+ * else recovers intrinsic capabilities (context window, output limit,
+ * reasoning, input modalities) from the bundled canonical index. The
+ * `recover-canonical-params "munito"` membership in `taxonomy/_discovery.kdl`
+ * records that posture; this function is the mapping.
+ *
+ * Thinking stays unset: an inherited reference ladder would win
+ * `resolveThinkingPolicy` and defeat Munito's authored effort rules, so the
+ * provider KDL owns the ladder and wire dialect. Identity, pricing, and compat
+ * are never borrowed: Munito publishes no per-model tariff, so pricing stays
+ * zeroed.
+ */
+export function mapMunitoReferenceModel<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	if (reference) {
+		return mapWithBundledReference(entry, defaults, reference);
+	}
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as ModelSpec<TApi> | undefined;
+	if (!canonical) {
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	}
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		contextWindow,
+		maxTokens,
+	};
+}
+
+const MUNITO_GLOBAL_BASE_URL = "https://api.munito.ai/inference/v1";
+
+/**
+ * Munito model-manager options. `/models` is public (invalid keys still 401),
+ * so discovery runs keyless; the key gates inference, not the roster probe.
+ * A successful snapshot is authoritative over the bundled seed rows, and it
+ * also owns the KDL-classified decision lanes: those ids ship as judge rows,
+ * but the roster decides whether they exist and which endpoint serves them.
+ */
+export function munitoModelManagerOptions(
+	config?: MunitoModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createOpenAICompatibleModelManagerOptions({
+		api: "openai-completions",
+		providerId: "munito",
+		defaultBaseUrl: MUNITO_GLOBAL_BASE_URL,
+		config,
+		dynamicModelsAuthoritative: true,
+		dynamicRunnerRowsAuthoritative: true,
+		filterModel: (_entry, model) => isMunitoChatModelId(model.id),
+		mapModel: mapMunitoReferenceModel,
 	});
 }
 

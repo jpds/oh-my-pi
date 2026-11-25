@@ -57,6 +57,7 @@ export type KnownProvider =
 	| "modal"
 	| "modular"
 	| "moonshot"
+	| "munito"
 	| "muse-code"
 	| "nace"
 	| "nanogpt"

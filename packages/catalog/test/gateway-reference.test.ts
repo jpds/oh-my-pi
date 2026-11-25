@@ -9,7 +9,9 @@ describe("Bundled model references", () => {
 		const reference = resolveModelReference("glm-5.3-flash", getBundledModelReferenceIndex());
 
 		expect(reference).toBeDefined();
+		// Both price the same upstream ids at $0.
 		expect(reference?.provider).not.toBe("cline-pass");
+		expect(reference?.provider).not.toBe("munito");
 	});
 });
 

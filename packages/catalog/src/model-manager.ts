@@ -51,6 +51,16 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	/** When true, a successful dynamic fetch is the complete provider catalog and prunes static-only models. */
 	dynamicModelsAuthoritative?: boolean;
 	/**
+	 * When true, the provider's non-chat static rows are derived from the same
+	 * `/models` roster as its chat rows (KDL-classified decision lanes), so an
+	 * authoritative snapshot owns their endpoint and their membership: a live
+	 * row of the same kind replaces the shipped one, and an id the roster no
+	 * longer serves is pruned. Without it, a non-chat row is an authored runner
+	 * surface (Vercel's `typesafe` judge seeds) that discovery neither rebases
+	 * nor retires. Honored only with `dynamicModelsAuthoritative`.
+	 */
+	dynamicRunnerRowsAuthoritative?: boolean;
+	/**
 	 * When true, a provider's dynamic rows are the deployment's whole truth
 	 * for input modality: a live text-only row strips the bundled reference's
 	 * image support instead of OR-merging it back. Declared by providers whose
@@ -264,6 +274,8 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 			: undefined;
 	const cache = readModelCache<TApi>(cacheProviderId, ttlMs, now, dbPath);
 	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
+	const dynamicRunnerRowsAuthoritative =
+		dynamicModelsAuthoritative && (options.dynamicRunnerRowsAuthoritative ?? false);
 	const isAuthoritativeDynamicCache = dynamicModelsAuthoritative && (cache?.payloadAuthoritative ?? false);
 	const restoredCache = restoreCachedModelHeaders(
 		cache?.models ?? [],
@@ -280,6 +292,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		input: options.dynamicInputAuthoritative ?? false,
 		reasoning: options.dynamicReasoningAuthoritative ?? false,
 		cost: options.dynamicCostAuthoritative ?? false,
+		runners: dynamicRunnerRowsAuthoritative,
 		staticNames: options.keepStaticNames ? new Map(staticModels.map(model => [model.id, model.name])) : undefined,
 	};
 	const cacheDropIds = options.dropCachedModelIdsOnStaticMismatch;
@@ -407,9 +420,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	);
 	const models = collapseBuiltVariants(
 		authoritativeDynamicFetchSucceeded
-			? retainModelIds(mergedModels, dynamicModels)
+			? retainModelIds(mergedModels, dynamicModels, dynamicRunnerRowsAuthoritative)
 			: !dynamicFetchSucceeded && isAuthoritativeDynamicCache && usableCachedModels.length > 0
-				? retainModelIds(mergedModels, usableCachedModels)
+				? retainModelIds(mergedModels, usableCachedModels, dynamicRunnerRowsAuthoritative)
 				: mergedModels,
 	);
 	const resolutionAuthoritative = !hasRemoteFetcher || remoteResolutionComplete || shouldUseFreshCacheAsAuthoritative;
@@ -471,7 +484,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 			);
 			const fallbackSnapshotModels = collapseBuiltVariants(
 				isAuthoritativeDynamicCache && latestUsableCacheModels.length > 0
-					? retainModelIds(mergedFallbackModels, latestUsableCacheModels)
+					? retainModelIds(mergedFallbackModels, latestUsableCacheModels, dynamicRunnerRowsAuthoritative)
 					: mergedFallbackModels,
 			);
 			if (
@@ -610,6 +623,8 @@ interface DynamicMergeAuthority {
 	readonly input: boolean;
 	readonly reasoning: boolean;
 	readonly cost: boolean;
+	/** Discovery owns same-kind non-chat rows (roster-derived runner rows). */
+	readonly runners: boolean;
 	/** Static display names by id that override dynamic rows (`keepStaticNames`). */
 	readonly staticNames: ReadonlyMap<string, string> | undefined;
 }
@@ -635,8 +650,15 @@ async function mergeDynamicModels<TApi extends Api>(
 			return;
 		}
 		// A policy-derived kind on a chat row is not permission to replace an
-		// authored runner. Only a kind present before materialization can do so.
-		if (modelKind(existingModel) !== "chat" && !explicitKindModels?.has(dynamicModel)) return;
+		// authored runner. Only a kind present before materialization can do so —
+		// or, on a provider whose non-chat rows are roster-derived, a discovered
+		// row of the same kind: `/models` owns that row's endpoint and membership.
+		if (
+			modelKind(existingModel) !== "chat" &&
+			!explicitKindModels?.has(dynamicModel) &&
+			!(authority.runners && modelKind(dynamicModel) === modelKind(existingModel))
+		)
+			return;
 		merged.set(dynamicModel.id, mergeDynamicModel(existingModel, dynamicModel, authority));
 	});
 	return Array.from(merged.values());
@@ -663,10 +685,15 @@ async function mergeCachedModels<TApi extends Api>(
 function retainModelIds<TApi extends Api>(
 	models: readonly Model<TApi>[],
 	retainedModels: readonly Model<TApi>[],
+	runnerRowsAuthoritative = false,
 ): Model<TApi>[] {
 	if (models.length === 0) return [];
 	const retainedIds = new Set(retainedModels.map(model => model.id));
-	return models.filter(model => modelKind(model) !== "chat" || retainedIds.has(model.id));
+	// An authored runner surface survives an authoritative snapshot that does
+	// not list it; a roster-derived one is retired with its chat neighbors.
+	return models.filter(
+		model => retainedIds.has(model.id) || (modelKind(model) !== "chat" && !runnerRowsAuthoritative),
+	);
 }
 
 const MODEL_CACHE_FINGERPRINT_VERSION = `merge-v5:${VERSION}`;

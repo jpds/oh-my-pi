@@ -92,6 +92,9 @@ function decodeAnswer(entry: Record<string, unknown>): Answer | undefined {
 	}
 }
 
+/** Question kinds this dialect encodes; anything else arrived pre-wired. */
+const CANONICAL_QUESTION_TYPES = new Set<string>(["noul", "choice", "score", "box"]);
+
 /** The Gemini API's `/v1beta/decisions` route. */
 export const googleDecisionsWire: JudgmentWire = {
 	// https://aistudio.google.com/docs/decisions-api#input: inline data up to 100 MB per request, counted as
@@ -115,7 +118,19 @@ export const googleDecisionsWire: JudgmentWire = {
 		const state = typeof request.state === "string" ? request.state : JSON.stringify(request.state);
 		const questions: Record<string, unknown> = {};
 		let index = 0;
-		for (const id in request.questions) questions[questionKey(index++)] = encodeQuestion(id, request.questions[id]);
+		for (const id in request.questions) {
+			const question = request.questions[id];
+			if (
+				typeof question.type !== "string" ||
+				typeof question.instructions !== "string" ||
+				!CANONICAL_QUESTION_TYPES.has(question.type)
+			) {
+				throw new AIError.ValidationError(
+					`judgment: question "${id}" is not a canonical question; the Gemini Decisions wire encodes new/choice/score questions only`,
+				);
+			}
+			questions[questionKey(index++)] = encodeQuestion(id, question as Question);
+		}
 		return {
 			model,
 			input: request.images?.length
