@@ -521,6 +521,7 @@ export function SettingsWindow(props: {
 			separator: settings.get("statusLine.separator"),
 			sessionAccent: settings.get("statusLine.sessionAccent"),
 			transparent: settings.get("statusLine.transparent"),
+			scaleGaugeToCompaction: settings.get("tui.scaleGaugeToCompaction"),
 		});
 	};
 

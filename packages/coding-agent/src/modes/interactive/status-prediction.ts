@@ -116,7 +116,8 @@ function isSettings(value: unknown): value is StatusLineSettings {
 		isOptional(value.compactThinkingLevel, isBoolean) &&
 		isOptional(value.contextLine, (mode): mode is StatusLineSettings["contextLine"] =>
 			isOneOf(CONTEXT_LINE_MODE_VALUES, mode),
-		)
+		) &&
+		isOptional(value.scaleGaugeToCompaction, isBoolean)
 	);
 }
 

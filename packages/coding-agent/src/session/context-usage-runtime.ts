@@ -1,4 +1,4 @@
-import { type CompactionSettings, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
+import { type CompactionSettings } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import {
 	computeCompactionBoundaries,
@@ -6,6 +6,7 @@ import {
 	type CompactionBoundaries,
 	type ContextBreakdown,
 	type ContextSavingsEstimate,
+	resolveCutoffTokens,
 } from "./context-usage";
 import type { ScopeLike } from "../config/registry";
 import type { AgentSession } from "./agent-session";
@@ -22,17 +23,15 @@ export function getSessionCompactionBoundaries(
 	contextWindow: number,
 	model?: Model | null,
 ): CompactionBoundaries | null {
-	if (!(contextWindow > 0)) return null;
 	const configured = resolveModelCompactionSettings(settings, model);
 	const compaction: CompactionSettings = configured;
-	if (!compaction.enabled || compaction.strategy === "off") return null;
-	const threshold = resolveThresholdTokens(contextWindow, compaction);
-	if (!(threshold > 0) || threshold > contextWindow) return null;
+	const cutoffTokens = resolveCutoffTokens(compaction, contextWindow);
+	if (cutoffTokens === undefined) return null;
 	const speculates = configured.asyncEnabled !== false && resolveSpeculationMethod(model, configured) !== undefined;
 	return computeCompactionBoundaries(
 		compaction,
 		contextWindow,
-		speculates ? resolveSpeculationLeadTokens(threshold) : undefined,
+		speculates ? resolveSpeculationLeadTokens(cutoffTokens) : undefined,
 	);
 }
 

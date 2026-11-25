@@ -14,6 +14,8 @@
 
 ### Added
 
+
+- Added `tui.scaleGaugeToCompaction` (Appearance → Display, "Scale Context Usage To Compaction"): the status line context gauge fills toward the auto-compaction cutoff instead of the full context window, so percentages run to 100% at the cutoff and the reserved past-cutoff space grays out as unusable. Values saved under the earlier `statusLine.scaleGaugeToCompaction` id (prototype deploys) migrate automatically.
 - Dictation now works with xAI speech-to-text models such as `xai-oauth/grok-voice-transcribe-2.0` ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
 
 ### Changed

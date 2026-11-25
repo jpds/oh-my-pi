@@ -21,6 +21,7 @@ import {
 	cfgStatusLineShowHookStatus,
 	cfgStatusLineTransparent,
 	cfgTuiCodexResetFireworks,
+	cfgTuiScaleGaugeToCompaction,
 } from "./settings";
 import { cfgGoalStatusInFooter } from "../goals/settings";
 
@@ -45,6 +46,7 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
 		transparent: cfgStatusLineTransparent.get(settings),
 		compactThinkingLevel: cfgStatusLineCompactThinkingLevel.get(settings),
 		contextLine: cfgStatusLineContextLine.get(settings),
+		scaleGaugeToCompaction: cfgTuiScaleGaugeToCompaction.get(settings),
 	}),
 	gitEnabled: () => cfgGitEnabled.get(settings),
 	codexResetFireworksEnabled: () => cfgTuiCodexResetFireworks.get(settings),

@@ -248,9 +248,19 @@ export class SessionStatusLine implements StatusLineModel {
 		const boundaries = this.#boundaries();
 		const settings = this.settings();
 		const slowModeLabel = this.#accountLabel();
+		// `tui.scaleGaugeToCompaction`: measure the gauge toward the
+		// auto-compaction cutoff (the same boundary the bar annotates) rather
+		// than the full window. Percent labels scale by it; level colors keep
+		// their raw-window thresholds.
+		const cutoffPercent = boundaries?.thresholdPercent ?? 0;
+		const gaugeWindow = cutoffPercent > 0 ? (cutoffPercent / 100) * context.window : 0;
+		const scaled =
+			settings.scaleGaugeToCompaction === true && gaugeWindow > 0
+				? { ...context, gaugeScale: context.window / gaugeWindow, gaugeWindow }
+				: context;
 		return {
 			...sessionFacts,
-			context,
+			context: scaled,
 			...(boundaries ? { compaction: boundaries } : {}),
 			...this.#jobs(),
 			...(slowModeLabel ? { slowModeLabel } : {}),

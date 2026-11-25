@@ -50,6 +50,15 @@ export interface StatusContext {
 	readonly window: number;
 	/** Null while unknown (right after compaction). */
 	readonly percent: number | null;
+	/**
+	 * Percent multiplier the gauge applies under `tui.scaleGaugeToCompaction`:
+	 * the context window ÷ the auto-compaction cutoff. Absent (or `1`) when the
+	 * setting is off, compaction is disabled, or the cutoff is unknown. Percent
+	 * labels scale by it; level thresholds stay on the raw `window`.
+	 */
+	readonly gaugeScale?: number;
+	/** Window the gauge measures toward: the compaction cutoff when scaled, else `window`. */
+	readonly gaugeWindow?: number;
 }
 
 /** Subscription quota windows of the active account (the `usage` segment). */
