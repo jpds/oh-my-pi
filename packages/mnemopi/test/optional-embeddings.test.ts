@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	available,
 	embed,
@@ -320,5 +323,39 @@ describe("optional embeddings", () => {
 			expect(second).toEqual([new Float32Array([0, 1, 4])]);
 			expect(inits).toEqual([FAST_MULTILINGUAL_E5_LARGE]);
 		});
+	});
+
+	it("initializes the local model from a runtime-scoped cache dir override without creating directories", async () => {
+		await withEnv(
+			{
+				NODE_ENV: undefined,
+				BUN_ENV: undefined,
+				MNEMOPI_NO_EMBEDDINGS: undefined,
+				MNEMOPI_EMBEDDING_MODEL: "BAAI/bge-small-en-v1.5",
+				MNEMOPI_EMBEDDING_API_URL: undefined,
+				OPENROUTER_BASE_URL: undefined,
+				OPENROUTER_API_KEY: undefined,
+				OPENAI_API_KEY: undefined,
+			},
+			async () => {
+				const pinnedDir = fs.mkdtempSync(path.join(os.tmpdir(), "mnemopi-pinned-"));
+				const defaultDir = getFastembedCacheDir();
+				const observedCacheDirs: Array<string | undefined> = [];
+				setLocalModelInitializerForTests(async options => {
+					observedCacheDirs.push(options.cacheDir);
+					return {
+						embed: streamRows(texts => texts.map(text => [text.length, 1])),
+					};
+				});
+
+				const vectors = await withMnemopiRuntimeOptions({ embeddings: { cacheDir: pinnedDir } }, () =>
+					embed(["pinned"]),
+				);
+				expect(vectors).toEqual([new Float32Array([6, 1])]);
+				expect(observedCacheDirs).toEqual([pinnedDir]);
+				const seen = fs.readdirSync(path.dirname(defaultDir), { withFileTypes: true }).map(d => d.name);
+				expect(seen.includes(path.basename(pinnedDir))).toBe(false);
+			},
+		);
 	});
 });

@@ -19,6 +19,7 @@
 - Debugger attach detects the target executable natively, and Windows eval probes no longer need `taskkill.exe` for cleanup.
 
 ### Fixed
+- Added `mnemopi.embeddingCacheDir`, pointing local embedding model loads (and the machine-shared embedding server keyed on them) at a specific fastembed cache dir instead of `~/.omp/cache/fastembed`. Intended for pinned model stores in images or containers: a read-only dir missing model files fails init with a warning rather than downloading, while a writable dir is populated on demand.
 
 - Resuming or rewinding a session with an aborted task result no longer throws while the transcript renders; the card shows the cancellation text ([#20533](https://github.com/can1357/oh-my-pi/pull/20533) by [@g0spel](https://github.com/g0spel))
 - Save in Plan Review now accepts a custom path and shows where the plan was saved without requiring you to dismiss the review ([#20539](https://github.com/can1357/oh-my-pi/issues/20539)).

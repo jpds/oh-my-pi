@@ -201,6 +201,7 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 	const embeddingQueryPrefix = nestedEmbeddings?.queryPrefix;
 	const embeddingInputType = nestedEmbeddings?.inputType;
 	const embeddingOnRequestFailed = nestedEmbeddings?.onRequestFailed;
+	const embeddingCacheDir = nestedEmbeddings?.cacheDir;
 
 	const embeddings =
 		embeddingDisabled !== undefined ||
@@ -215,7 +216,8 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 		embeddingBatchSize !== undefined ||
 		embeddingQueryPrefix !== undefined ||
 		embeddingInputType !== undefined ||
-		embeddingOnRequestFailed !== undefined
+		embeddingOnRequestFailed !== undefined ||
+		embeddingCacheDir !== undefined
 			? {
 					disabled: embeddingDisabled,
 					model: embeddingModel,
@@ -230,6 +232,7 @@ function resolveRuntimeOptions(options: MnemopiOptions): ResolvedMnemopiRuntimeO
 					queryPrefix: embeddingQueryPrefix,
 					inputType: embeddingInputType,
 					onRequestFailed: embeddingOnRequestFailed,
+					cacheDir: embeddingCacheDir,
 				}
 			: undefined;
 
