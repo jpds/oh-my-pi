@@ -61,6 +61,8 @@ import {
 import type { JudgmentImageAssets, JudgmentWire } from "./wire";
 export type { JudgmentImageAssets } from "./wire";
 
+export { TYPESAFE_JUDGMENT_ROUTE } from "./systemone";
+
 export const TYPESAFE_PROVIDER = "typesafe";
 export const TYPESAFE_DEFAULT_MODEL = "jev-latest";
 
