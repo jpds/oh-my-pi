@@ -91,6 +91,20 @@ export interface CompactionBoundaries {
 }
 
 /**
+ * Where auto-compaction fires, in tokens, or `undefined` when compaction is
+ * disabled/off, the window is unknown, or the resolved cutoff would not sit
+ * inside the window. The breakdown, the boundary percents, and the
+ * session-level boundary resolution all gate on this same predicate.
+ */
+export function resolveCutoffTokens(compactionSettings: CompactionSettings, contextWindow: number): number | undefined {
+	if (!(contextWindow > 0) || !compactionSettings.enabled || compactionSettings.strategy === "off") {
+		return undefined;
+	}
+	const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
+	return thresholdTokens > 0 && thresholdTokens <= contextWindow ? thresholdTokens : undefined;
+}
+
+/**
  * Boundary positions for the status line's annotated context gauge. `null`
  * when compaction is disabled/off or the window is unknown — the gauge then
  * renders without markers. The host supplies a lead only when its configured
@@ -101,10 +115,8 @@ export function computeCompactionBoundaries(
 	contextWindow: number,
 	speculationLeadTokens?: number,
 ): CompactionBoundaries | null {
-	if (!(contextWindow > 0)) return null;
-	if (!compactionSettings.enabled || compactionSettings.strategy === "off") return null;
-	const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
-	if (!(thresholdTokens > 0) || thresholdTokens > contextWindow) return null;
+	const thresholdTokens = resolveCutoffTokens(compactionSettings, contextWindow);
+	if (thresholdTokens === undefined) return null;
 	return {
 		thresholdPercent: (thresholdTokens / contextWindow) * 100,
 		speculationPercent:
@@ -576,13 +588,8 @@ export function computeContextBreakdown(session: ContextUsageSession, options: C
 	let thresholdTokens: number | undefined;
 	if (contextWindow > 0) {
 		const compactionSettings = options.compaction;
-		if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
-			const threshold = resolveThresholdTokens(contextWindow, compactionSettings);
-			if (threshold > 0 && threshold <= contextWindow) thresholdTokens = threshold;
-			autoCompactBufferTokens = Math.max(0, contextWindow - threshold);
-		} else {
-			autoCompactBufferTokens = 0;
-		}
+		thresholdTokens = resolveCutoffTokens(compactionSettings, contextWindow);
+		autoCompactBufferTokens = thresholdTokens !== undefined ? Math.max(0, contextWindow - thresholdTokens) : 0;
 		// Even when fully disabled, fall back to a sensible reserve floor for display.
 		if (autoCompactBufferTokens === 0 && compactionSettings.enabled) {
 			autoCompactBufferTokens = effectiveReserveTokens(contextWindow, compactionSettings);
