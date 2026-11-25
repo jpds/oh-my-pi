@@ -307,7 +307,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 					'        "pick": {"type": "choice", "instructions": "which?", "criteria": {"a": None, "b": "bee"}},',
 					"    })",
 					"    print(json.dumps(answers, sort_keys=True))",
-					"asyncio.run(main())",
+					"await main()",
 				].join("\n"),
 				DIRECT_ENV(server.url.toString()),
 			);
@@ -374,7 +374,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 					'        "ok": {"type": "bool", "instructions": "fake?", "criteria": {"true": "yes", "false": "no"}},',
 					"    })",
 					"    print(json.dumps(answers, sort_keys=True))",
-					"asyncio.run(main())",
+					"await main()",
 				].join("\n"),
 				{ PI_JUDGE_DIRECT: withMaps },
 			);
@@ -443,7 +443,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 					'        "model": status.get("model"),',
 					'        "attach_same": judge_batch.attach(b.id).id == b.id,',
 					"    }, sort_keys=True))",
-					"asyncio.run(main())",
+					"await main()",
 				].join("\n"),
 				DIRECT_ENV(server.url.toString()),
 			);
@@ -496,7 +496,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 					'        print("ATTACH (BAD)")',
 					"    except RuntimeError as exc:",
 					'        print("ATTACH_GONE:", "eval tool bridge unreachable at" in str(exc))',
-					"asyncio.run(main())",
+					"await main()",
 				].join("\n"),
 				{
 					...DIRECT_ENV(server.url.toString()),
@@ -543,7 +543,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 					"        except TypeError as exc:",
 					'            errors.append(str(exc).split(": ")[1])',
 					"    print(json.dumps(errors))",
-					"asyncio.run(main())",
+					"await main()",
 				].join("\n"),
 				DIRECT_ENV(server.url.toString()),
 			);
@@ -570,7 +570,7 @@ describe("python direct judgment (PI_JUDGE_DIRECT)", () => {
 				'        print("NO ERROR (BAD)")',
 				"    except RuntimeError as exc:",
 				"        print(str(exc))",
-				"asyncio.run(main())",
+				"await main()",
 			].join("\n"),
 			{
 				PI_TOOL_BRIDGE_URL: "http://127.0.0.1:1",
@@ -609,7 +609,7 @@ describe("python judge question normalization", () => {
 				"        except TypeError as exc:",
 				"            errors.append(str(exc))",
 				'    print(json.dumps({"normalized": normalized, "passthrough": passthrough, "errors": errors}, sort_keys=True))',
-				"asyncio.run(main())",
+				"await main()",
 			].join("\n"),
 			{},
 		);
@@ -653,7 +653,7 @@ describe("python judge question normalization", () => {
 				'            errors.append(str(exc).split(" cannot run:")[0])',
 				"    print(json.dumps(errors))",
 				"",
-				"asyncio.run(main())",
+				"await main()",
 			].join("\n"),
 			{},
 		);
