@@ -6,7 +6,6 @@ This document covers the on-device models in the `local` catalog and records the
 modelRoles:
    tiny: local/lfm2.5-230m
    memory: local/lfm2-1.2b
-   smol: local/lfm3-1.7b
    speech: local/phonon-31m
    dictation: local/parakeet-tdt-0.6b-v3
    # A local tiny model may also serve typed judgments:
@@ -16,7 +15,6 @@ retry:
    fallbackChains:
       tiny: []
       memory: []
-      smol: []
       speech: []
       dictation: []
       judge: []
@@ -26,9 +24,7 @@ An explicit empty chain keeps each workload local. Leaving a model-kind chain un
 
 Inspect the catalog with `omp models --kind tiny`, `omp models --kind tts`, and `omp models --kind stt`. Download tiny models with `omp tiny-models list`, `omp tiny-models download <model-id>`, or `omp tiny-models download all`. Run `omp setup speech` to choose, persist, and download the local speech and dictation models selected by their roles.
 
-The tiny-model CLI and source registry retain **title** and **memory** groupings because those are the workloads used to benchmark and recommend model sizes. They are not runtime model classes: every title and memory entry has catalog kind `tiny`, and any compatible entry can be assigned to `tiny`, `memory`, or `judge`. Choose based on quality and resource needs rather than the CLI grouping alone.
-
-A third group, `LOCAL_CHAT_MODELS` in the same source file, holds on-device models that back the `smol` chat role instead: they carry catalog kind `chat`, are served by the same worker, and are intentionally absent from `TINY_LOCAL_MODELS`, `omp models --kind tiny`, and `omp tiny-models list`. `local/lfm3-1.7b` (LFM3 1.7B, 256K context, reasoning-capable, ONNX q4 ≈ 1.3 GB) is the current entry; the worker always renders it with `enable_thinking: false`, and local inference carries text only — no tool calls and no streaming.
+The tiny-model CLI and source registry retain **title** and **memory** groupings because those are the workloads used to benchmark and recommend model sizes. They are not runtime model classes: every entry in both groups has catalog kind `tiny`, and any compatible entry can be assigned to `tiny`, `memory`, or `judge`. Choose based on quality and resource needs rather than the CLI grouping alone.
 
 ## Runtime / environment findings
 
@@ -258,6 +254,7 @@ $PI_TINY_MODELS_CACHE/
 Layout notes:
 
 - Model weights are laid out as `<cache>/<org>/<repo>/…` (the local ONNX text models and sherpa STT use `org/name`; predict and MLX use `org--name`). Only that one directory moves — `PI_TINY_MODELS_CACHE` overrides `getTinyModelsCacheDir()` directly.
-- The side-installed runtimes (`tiny-title-runtime/transformers-<ver>`, `stt-runtime/…`, `tts-runtime/…`, `tiny-mlx-runtime/…`) are **sibling directories** of the cache (they use `dirname(getTinyModelsCacheDir())`) and are still written per host. Under a read-only Nix store, symlink the weights directory into a writable cache dir rather than pointing at the store path itself: `ln -s /nix/store/…-lfm2.5-230m ~/.omp/agent/cache/tiny-models/LiquidAI/LFM2.5-230M-ONNX`.
-- Weights are read-only safe once complete (the downloader skips complete files), but the first runtime install and lock/marker files need a writable parent.
+- The side-installed runtimes (`tiny-title-runtime/transformers-<ver>`, `stt-runtime/…`, `tts-runtime/…`, `tiny-mlx-runtime/…`) live **under the cache**, in `<cache>/runtimes/`, so pointing `PI_TINY_MODELS_CACHE` at a writable persistent directory relocates both the weights and the runtimes together. The only real requirement is that the runtime install destination is writable (installs and lock/marker files write into it). Do **not** point it at a read-only Nix store path itself — instead, keep the env override on a writable dir and symlink (or copy) the weights in: `ln -s /nix/store/…-lfm2.5-230m ~/.omp/agent/cache/tiny-models/LiquidAI/LFM2.5-230M-ONNX`.
+- To keep the weights cache a read-only store path anyway (read-only is fine for weights), set `PI_TINY_MODELS_RUNTIMES` to a writable directory: it relocates the runtime root away from `<cache>/runtimes/` (e.g. `PI_TINY_MODELS_RUNTIMES=/var/lib/omp/tiny-models/runtimes`), and `ensureRuntimeInstalled` writes only there. This is the Nix-store-friendly split: `PI_TINY_MODELS_CACHE=/nix/store/…-lfm2.5-230m` (or per-model directories under it) + `PI_TINY_MODELS_RUNTIMES=/var/lib/omp/tiny-models/runtimes`.
+- Weights are read-only safe once complete (the downloader skips complete files); only the runtime install and lock/marker files need write access.
 - Alternatively, keep the default paths and symlink only specific models into `~/.omp/agent/cache/tiny-models/` — resolution is a plain directory read, so per-model symlinks work per host without any env var.

@@ -264,6 +264,10 @@
 ### Fixed
 
 - Fixed Windows archive extraction overwriting existing files or following existing symlinks when copying a symlink entry without symlink privileges ([#15931](https://github.com/can1357/oh-my-pi/pull/15931) by [@jchanghong023](https://github.com/jchanghong023)).
+### Changed
+
+- Side-installed tiny-model runtimes (`tiny-title-runtime`, `stt-runtime`, `tts-runtime`, `tiny-mlx-runtime`) now live under `<tiny-models-cache>/runtimes/` (new `getTinyModelsRuntimesDir()`) instead of the cache's parent directory, so `PI_TINY_MODELS_CACHE` relocates the runtimes along with the weights; existing installs re-materialize into the new path on first use.
+- Added `PI_TINY_MODELS_RUNTIMES`, which overrides the tiny-model side-runtime root independently of `PI_TINY_MODELS_CACHE` — e.g. keeping the weights cache at a read-only Nix store path while the runtimes install into a writable directory; relative values are ignored, `~` is expanded.
 
 ## [18.11.3] - 2026-10-16
 
