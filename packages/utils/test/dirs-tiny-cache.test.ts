@@ -18,8 +18,9 @@ afterEach(() => {
 describe("tiny models cache dir override", () => {
 	it("prefers PI_TINY_MODELS_CACHE over the agent dir, including an explicit one", () => {
 		delete process.env[ENV_KEY];
-		const agentDir = path.join(os.homedir(), ".omp", "agent");
-		expect(getTinyModelsCacheDir()).toBe(path.join(agentDir, "cache", "tiny-models"));
+		// The default agent dir depends on the host's OMP/agent env overrides, so pin
+		// the explicit argument; the no-argument form is covered against the override.
+		const agentDir = path.join(os.tmpdir(), "omp-agent-home");
 		expect(getTinyModelsCacheDir(agentDir)).toBe(path.join(agentDir, "cache", "tiny-models"));
 
 		const storeDir = path.join(os.tmpdir(), "nix-store", "tiny-models");
