@@ -458,10 +458,15 @@ function costSeg(input: SegInput): SegView | null {
 
 function contextSeg(input: SegInput): SegView {
 	const { facts } = input;
-	const { percent, window, tokens } = facts.context;
-	const level = contextLevel(percent ?? 0, window);
+	const { percent, tokens, window: rawWindow } = facts.context;
+	// The gauge measures toward the compaction cutoff when scaled; level colors
+	// stay on the raw window.
+	const window = facts.context.gaugeWindow ?? rawWindow;
+	const displayPct = percent === null ? null : percent * (facts.context.gaugeScale ?? 1);
+	const level = contextLevel(percent ?? 0, rawWindow);
 	const color = contextColor(level);
-	const text = percent === null && window > 0 ? formatNumber(window) : formatContextUsage(percent, window, tokens);
+	const text =
+		displayPct === null && window > 0 ? formatNumber(window) : formatContextUsage(displayPct, window, tokens);
 	const spans: TspSpan[] = [span(text, color)];
 	const pieces: LookPiece[] = [{ icon: "context" }, { t: text, s: color }];
 	if (facts.autoCompact) {

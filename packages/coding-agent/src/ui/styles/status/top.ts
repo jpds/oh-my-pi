@@ -85,18 +85,24 @@ function gauge(look: StatusTopLook, width: number, embedded: boolean, cx: PaintC
 	const lit = accentHex ? fgSgr(accentHex, theme.depth) : theme.fgSgr("borderAccent");
 	const rule = theme.symbols.box.horizontal;
 	const mode = look.contextLine ?? "embedded";
-	const { percent, window } = look.context;
+	const { percent } = look.context;
+	// Under `tui.scaleGaugeToCompaction` the gauge measures toward the
+	// auto-compaction cutoff: percentages and the window label use the cutoff
+	// units, so the bar fills where compaction fires. Level colors stay raw.
+	const window = look.context.gaugeWindow ?? look.context.window;
+	const scalePct = look.context.gaugeScale ?? 1;
+	const displayPct = percent === null ? null : percent * scalePct;
 	if (mode === "off" || (percent === null && window <= 0)) return `${BG_DEFAULT}${lit}${rule.repeat(width)}\x1b[39m`;
 
-	const clamped = percent === null ? 0 : Math.min(100, Math.max(0, percent));
-	const overflow = percent !== null && percent > 100;
+	const clamped = displayPct === null ? 0 : Math.min(100, Math.max(0, displayPct));
+	const overflow = displayPct !== null && displayPct > 100;
 	let percentLabel = "";
 	let windowLabel = "";
 	let percentStart = -1;
 	let windowStart = -1;
 	let scale = width;
-	if (embedded && width >= embeddedWidth(percent, window)) {
-		percentLabel = percent === null ? "" : embeddedPercent(overflow ? percent : clamped);
+	if (embedded && width >= embeddedWidth(displayPct, window)) {
+		percentLabel = displayPct === null ? "" : embeddedPercent(overflow ? displayPct : clamped);
 		windowLabel = formatNumber(window);
 		if (overflow) {
 			percentStart = width - percentLabel.length;
@@ -111,8 +117,11 @@ function gauge(look: StatusTopLook, width: number, embedded: boolean, cx: PaintC
 	let thresholdAt = -1;
 	if ((mode === "annotated" || mode === "embedded") && look.autoCompact && look.compaction && width >= 8) {
 		const cell = (at: number) => Math.min(scale - 1, Math.max(0, Math.round((at / 100) * scale)));
-		thresholdAt = cell(look.compaction.thresholdPercent);
-		if (look.compaction.speculationPercent !== null) speculationAt = cell(look.compaction.speculationPercent);
+		// Boundary percents are shares of the raw window; the scaled gauge draws
+		// them in its own units.
+		thresholdAt = cell(look.compaction.thresholdPercent * scalePct);
+		if (look.compaction.speculationPercent !== null)
+			speculationAt = cell(look.compaction.speculationPercent * scalePct);
 		if (speculationAt === thresholdAt) speculationAt = -1;
 	}
 	if (percentLabel && percentStart < 0) {
@@ -197,7 +206,10 @@ function paintTop(node: UiNode, cx: PaintContext): Block {
 
 	let segs = look.segs;
 	if (band) segs = segs.filter(seg => seg.key() !== "session_name");
-	const { percent, window } = look.context;
+	const { percent, window: rawWindow } = look.context;
+	// Labels inside the gauge are drawn in its units (cutoff when scaled).
+	const window = look.context.gaugeWindow ?? rawWindow;
+	const displayPct = percent === null ? null : percent * (look.context.gaugeScale ?? 1);
 	const embedded =
 		!chip &&
 		look.contextLine === "embedded" &&
@@ -205,7 +217,7 @@ function paintTop(node: UiNode, cx: PaintContext): Block {
 		segs.some(isContext) &&
 		segs.some(seg => !isContext(seg) && !BADGES.has(seg.key() ?? ""));
 	if (embedded) segs = segs.filter(seg => !isContext(seg));
-	const gaugeWidth = embedded ? embeddedWidth(percent, window) : 0;
+	const gaugeWidth = embedded ? embeddedWidth(displayPct, window) : 0;
 
 	const fit = fitStatus(cx, segs, {
 		separatorWidth: visibleWidth(sep.left),

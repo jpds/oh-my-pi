@@ -176,18 +176,24 @@ export function composerFacts(props: {
 
 	const meter = computed(() => {
 		const state = props.facts();
-		const { percent, window, tokens } = state.context;
+		const { percent, tokens, window: rawWindow } = state.context;
 		const boundaries = state.autoCompact ? state.compaction : undefined;
+		// Same scale as the gauge: under `tui.scaleGaugeToCompaction` the meter
+		// measures toward the auto-compaction cutoff. Level colors stay on the
+		// raw window, mapped into these units.
+		const scale = state.context.gaugeScale ?? 1;
+		const window = state.context.gaugeWindow ?? rawWindow;
+		const displayPct = percent === null ? null : percent * scale;
 		const lines = [
-			percent === null ? "Context usage unknown" : `Context ${Math.round(percent)}% used`,
+			displayPct === null ? "Context usage unknown" : `Context ${Math.round(displayPct)}% used`,
 			window > 0 ? `${formatNumber(tokens)} of ${formatNumber(window)} tokens` : "No context window",
 		];
-		if (boundaries) lines.push(`Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`);
+		if (boundaries) lines.push(`Auto-compact at ${Math.round(boundaries.thresholdPercent * scale)}%`);
 		if (state.speculation === "running") lines.push("Compaction summary in progress");
 		else if (state.speculation === "armed") lines.push("Compaction summary ready");
-		const used = percent === null ? null : Math.min(1, percent / 100);
+		const used = displayPct === null ? null : Math.min(1, displayPct / 100);
 		const speculationAt =
-			boundaries?.speculationPercent == null ? null : Math.min(1, boundaries.speculationPercent / 100);
+			boundaries?.speculationPercent == null ? null : Math.min(1, (boundaries.speculationPercent * scale) / 100);
 		const marks: TspMeterMark[] = [];
 		if (boundaries) {
 			if (speculationAt !== null) {
@@ -199,20 +205,23 @@ export function composerFacts(props: {
 				});
 			}
 			marks.push({
-				at: Math.min(1, boundaries.thresholdPercent / 100),
+				at: Math.min(1, (boundaries.thresholdPercent * scale) / 100),
 				icon: "context.compaction",
-				title: `Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`,
+				title: `Auto-compact at ${Math.round(boundaries.thresholdPercent * scale)}%`,
 			});
 		}
 		return {
 			value: used,
-			thresholds: { warn: levelShare(window, 50, 150_000), bad: levelShare(window, 90, 500_000) },
+			thresholds: {
+				warn: Math.min(1, levelShare(rawWindow, 50, 150_000) * scale),
+				bad: Math.min(1, levelShare(rawWindow, 90, 500_000) * scale),
+			},
 			parts:
 				used !== null && speculationAt !== null && used > speculationAt
 					? [{ value: speculationAt }, { value: used - speculationAt, token: "accent" }]
 					: undefined,
 			marks: marks.length > 0 ? marks : undefined,
-			label: percent === null ? undefined : `${Math.round(percent)}%`,
+			label: displayPct === null ? undefined : `${Math.round(displayPct)}%`,
 			total: window > 0 ? formatNumber(window) : undefined,
 			title: lines.join("\n"),
 		};
