@@ -154,6 +154,15 @@ describe("local inference API", () => {
 		expect(result.stopReason).toBe("aborted");
 	});
 
+	it("runs a local chat-kind model through the worker instead of rejecting it", async () => {
+		const chat = vi.spyOn(tinyModelClient, "chat").mockResolvedValue("lfm3 answer");
+		const chatModel = getBundledModel("local", "lfm3-1.7b")!;
+		const result = await completeSimple(chatModel, { messages: [userMessage("question")] }, { maxTokens: 64 });
+
+		expect(chat).toHaveBeenCalledWith("lfm3-1.7b", [{ role: "user", content: "question" }], expect.anything());
+		expect(result).toMatchObject({ content: [{ type: "text", text: "lfm3 answer" }], stopReason: "stop" });
+	});
+
 	it("rejects non-tiny local models before invoking the worker client", async () => {
 		const chat = vi.spyOn(tinyModelClient, "chat").mockResolvedValue("should not run");
 		const nonTinyModel = getBundledModel("local", "phonon-31m")!;

@@ -7,6 +7,7 @@
 - `providers.fetch` values `native`, `trafilatura`, and `lynx` are replaced by a single `local` value for the in-process reader engine.
 
 ### Added
+- Added LFM3-1.7B as an on-device chat model: `local/lfm3-1.7b` (256K context, reasoning-capable, ONNX q4) backs the `smol` role, local chat now serves any worker-registered model, and Transformers.js moves to 4.3.2 for the LFM3 architecture
 
 - Dictation now works with xAI speech-to-text models such as `xai-oauth/grok-voice-transcribe-2.0` ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
 

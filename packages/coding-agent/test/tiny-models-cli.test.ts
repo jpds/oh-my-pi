@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { resolveModels, runTinyModelsCommand } from "@oh-my-pi/pi-coding-agent/cli/tiny-models-cli";
-import { TINY_LOCAL_MODELS } from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { getTinyLocalModelSpec, TINY_LOCAL_MODELS } from "@oh-my-pi/pi-coding-agent/tiny/models";
 import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 
 afterEach(() => {
@@ -8,6 +8,15 @@ afterEach(() => {
 });
 
 describe("tiny-models download model resolution", () => {
+	it("keeps local chat models servable by the worker but out of the tiny registry list", () => {
+		// smol-role chat models resolve through the worker spec lookup…
+		expect(getTinyLocalModelSpec("lfm3-1.7b")?.repo).toBe("onnx-community/LFM3-1.7B-ONNX");
+		// …without being advertised as tiny/memory entries.
+		expect(TINY_LOCAL_MODELS.map(spec => spec.key)).not.toContain("lfm3-1.7b");
+		expect(resolveModels("lfm3-1.7b")).toEqual(["lfm3-1.7b"]);
+		expect(resolveModels("all", false)).not.toContain("lfm3-1.7b");
+	});
+
 	it("excludes ONNX-blocked models from `all` so the bulk prefetch stays green", () => {
 		const unsupported = TINY_LOCAL_MODELS.filter(
 			spec => "onnxUnsupportedReason" in spec && spec.onnxUnsupportedReason,

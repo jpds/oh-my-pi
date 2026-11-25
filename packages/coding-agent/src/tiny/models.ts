@@ -123,6 +123,33 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 
 export type TinyMemoryLocalModelKey = (typeof TINY_MEMORY_LOCAL_MODELS)[number]["key"];
 
+/**
+ * Local chat models served by the same on-device worker but not offered as
+ * `tiny`/`memory` registry entries: they back the `smol` chat role instead and
+ * are deliberately absent from `TINY_LOCAL_MODELS` / `omp tiny-models list`.
+ */
+export const LOCAL_CHAT_MODELS = [
+	{
+		key: "lfm3-1.7b",
+		repo: "onnx-community/LFM3-1.7B-ONNX",
+		dtype: "q4",
+		mlxRepo: "LiquidAI/LFM3-1.7B-MLX-4bit",
+		label: "LFM3 1.7B",
+		description: "LFM3 text model, about 1.3 GB cached; used for local chat (smol role).",
+		contextNote: "Largest local option; heavier load and slower decode than LFM2.5.",
+		// The family reasons unless the chat template disables it; the tiny worker
+		// always renders `enable_thinking: false`, so no hidden reasoning reaches
+		// callers today (judgment sizes its budget from this flag).
+		reasoning: true,
+	},
+] as const satisfies readonly TinyTitleLocalModelSpec[];
+
+export type LocalChatModelKey = (typeof LOCAL_CHAT_MODELS)[number]["key"];
+
+export function isLocalChatModelKey(value: string): value is LocalChatModelKey {
+	return LOCAL_CHAT_MODELS.some(model => model.key === value);
+}
+
 export function isTinyMemoryLocalModelKey(value: string): value is TinyMemoryLocalModelKey {
 	return TINY_MEMORY_LOCAL_MODELS.some(model => model.key === value);
 }
@@ -139,14 +166,15 @@ export function isTinyMemoryReasoningModelKey(key: TinyMemoryLocalModelKey): boo
 	return "reasoning" in spec && spec.reasoning === true;
 }
 
-/** Any local model key (title or memory), used by the shared inference worker. */
-export type TinyLocalModelKey = TinyTitleLocalModelKey | TinyMemoryLocalModelKey;
+/** Any local model key (title, memory, or local chat), used by the shared inference worker. */
+export type TinyLocalModelKey = TinyTitleLocalModelKey | TinyMemoryLocalModelKey | LocalChatModelKey;
 
-/** Resolve a local model spec by key across both the title and memory registries. */
+/** Resolve a local model spec by key across the title, memory, and local-chat registries. */
 export function getTinyLocalModelSpec(key: string): TinyTitleLocalModelSpec | undefined {
 	return (
 		TINY_TITLE_LOCAL_MODELS.find(model => model.key === key) ??
-		TINY_MEMORY_LOCAL_MODELS.find(model => model.key === key)
+		TINY_MEMORY_LOCAL_MODELS.find(model => model.key === key) ??
+		LOCAL_CHAT_MODELS.find(model => model.key === key)
 	);
 }
 

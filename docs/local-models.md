@@ -6,6 +6,7 @@ This document covers the on-device models in the `local` catalog and records the
 modelRoles:
    tiny: local/lfm2.5-230m
    memory: local/lfm2-1.2b
+   smol: local/lfm3-1.7b
    speech: local/phonon-31m
    dictation: local/parakeet-tdt-0.6b-v3
    # A local tiny model may also serve typed judgments:
@@ -15,6 +16,7 @@ retry:
    fallbackChains:
       tiny: []
       memory: []
+      smol: []
       speech: []
       dictation: []
       judge: []
@@ -24,7 +26,9 @@ An explicit empty chain keeps each workload local. Leaving a model-kind chain un
 
 Inspect the catalog with `omp models --kind tiny`, `omp models --kind tts`, and `omp models --kind stt`. Download tiny models with `omp tiny-models list`, `omp tiny-models download <model-id>`, or `omp tiny-models download all`. Run `omp setup speech` to choose, persist, and download the local speech and dictation models selected by their roles.
 
-The tiny-model CLI and source registry retain **title** and **memory** groupings because those are the workloads used to benchmark and recommend model sizes. They are not runtime model classes: every entry in both groups has catalog kind `tiny`, and any compatible entry can be assigned to `tiny`, `memory`, or `judge`. Choose based on quality and resource needs rather than the CLI grouping alone.
+The tiny-model CLI and source registry retain **title** and **memory** groupings because those are the workloads used to benchmark and recommend model sizes. They are not runtime model classes: every title and memory entry has catalog kind `tiny`, and any compatible entry can be assigned to `tiny`, `memory`, or `judge`. Choose based on quality and resource needs rather than the CLI grouping alone.
+
+A third group, `LOCAL_CHAT_MODELS` in the same source file, holds on-device models that back the `smol` chat role instead: they carry catalog kind `chat`, are served by the same worker, and are intentionally absent from `TINY_LOCAL_MODELS`, `omp models --kind tiny`, and `omp tiny-models list`. `local/lfm3-1.7b` (LFM3 1.7B, 256K context, reasoning-capable, ONNX q4 ≈ 1.3 GB) is the current entry; the worker always renders it with `enable_thinking: false`, and local inference carries text only — no tool calls and no streaming.
 
 ## Runtime / environment findings
 

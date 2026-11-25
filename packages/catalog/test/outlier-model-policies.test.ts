@@ -26,6 +26,10 @@ describe("outlier catalog policies", () => {
 		expect(local["nemotron-streaming-en-0.6b"]?.kind).toBe("stt");
 		expect(local["whisper-large-v3-turbo"]?.kind).toBe("stt");
 		expect(local["lfm2.5-230m"]?.kind).toBe("tiny");
+		// Exact chat override outranks the `lfm*` -> tiny glob so the smol role can pick it.
+		expect(local["lfm3-1.7b"]?.kind).toBe("chat");
+		expect(local["lfm3-1.7b"]?.reasoning).toBe(true);
+		expect(local["lfm3-1.7b"]?.contextWindow).toBe(262_144);
 		expect(buildModel(chatSpec("typesafe", "typesafe")).kind).toBe("judge");
 		expect(buildModel(chatSpec("web", "web-search")).kind).toBe("search");
 	});
