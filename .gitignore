@@ -100,3 +100,6 @@ packages/coding-agent/bench/boot-baseline.json
 /.bazelrc.user
 
 .parity/
+
+# Catalog generator stencil.so snapshot (offline regen replay)
+packages/catalog/.cache/
