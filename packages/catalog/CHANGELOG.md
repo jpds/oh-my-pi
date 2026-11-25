@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed catalog generation baking capability-less discovery rows (e.g. Munito's `/models` entries) with the provisional effort ladder instead of the reviewed provider ladder once reasoning capability is known.
+
+### Removed
+
+- Removed unused exports `hasQuotaTierPolicy` (`/compat/behavior`), `hasRoutingVariants` (`/compat/taxonomy`), `toFirepassPublicModelId` (`/fireworks-model-id`), `isAzureDeploymentsUrl` (`/hosts`) and `toPositiveNumberOrNull` (`/utils`) ([#20528](https://github.com/can1357/oh-my-pi/pull/20528))
+
+### Added
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models (e.g. `vercel-ai-gateway/typesafe-ai/jev`); the catalog supplies their `/v1/evaluate` judgment defaults at build time, so no user config is needed ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added `Model.judgment` (`JudgmentConfig`: `route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) declaring per-model System One judgment endpoint overrides, honored for custom providers and `modelOverrides` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+
+- Added ArkaneCloud provider: `/login arkanecloud` with `ARKANECLOUD_API_KEY`, models and prices discovered live per API key ([#20506](https://github.com/can1357/oh-my-pi/pull/20506) by [@Randyopo](https://github.com/Randyopo))
+
+- Added `xai-oauth/grok-voice-transcribe-2.0` (SuperGrok speech-to-text on `api.x.ai/v1/stt`, through the new `xai-stt` runner API) ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
+
+### Changed
+
+- Seeded models now survive their provider's model exclusions ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
+### Added
+
+- Added Refuseless (`refuseless`) with abliterated and standard open-weight models, live model discovery from `https://api.refuseless.com/v1/models`, and `/login refuseless` (`REFUSELESS_API_KEY`)
+
 ## [19.2.1] - 2026-11-25
 
 ### Fixed
@@ -25,18 +48,6 @@
 - Removed StepFun's `dr-search-api` web-search SKU from chat-model listings.
 - Updated Devin and Cursor pricing and usage accounting for image tokens and long-context GPT-5.6 models to match their published rates and limits.
 - Repeated provider resolution reuses bundled model fingerprints instead of serializing the same catalog rows again.
-- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models (e.g. `vercel-ai-gateway/typesafe-ai/jev`); the catalog supplies their `/v1/evaluate` judgment defaults at build time, so no user config is needed ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
-- Added `Model.judgment` (`JudgmentConfig`: `route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) declaring per-model System One judgment endpoint overrides, honored for custom providers and `modelOverrides` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
-- Added GLM-5.4 to the Zhipu Coding Plan with image input and 1M context, gave it the low/high/max thinking ladder on every host, and preferred it over GLM-5.3 for the `slow` role
-- Added `fetchOpenRouterChatModels()` and `OPENROUTER_BASE_URL` to `@oh-my-pi/pi-catalog/provider-models/openai-compat` for reading OpenRouter's tool-capable chat roster outside the `openrouter` provider.
-- `toolSchemaFlavor: "google"` rewrites OpenAI-compatible tool schemas into Gemini's dialect; GitHub Copilot Gemini models use it ([#20198](https://github.com/can1357/oh-my-pi/issues/20198))
-
-### Fixed
-
-- Fixed catalog generation baking capability-less discovery rows (e.g. Munito's `/models` entries) with the provisional effort ladder instead of the reviewed provider ladder once reasoning capability is known.
-- Fixed requests to Bedrock's Kimi K3.1 Pro Highspeed profiles failing with "The task request was rejected by the target"; requests now ask for 131,072 output tokens instead of the full context window ([#20240](https://github.com/can1357/oh-my-pi/pull/20240) by [@alblez](https://github.com/alblez))
-- Fixed Claude Opus 4.8+, Sonnet 5.5, Haiku 5.5, and Fable/Mythos 5 on Google Vertex failing every turn with a 400 (`Input tag 'tool_removal'`) after the active tool set changed mid-session ([#20275](https://github.com/can1357/oh-my-pi/issues/20275))
-- Added OpenCode's free `jev-1.13-free` judge to OpenCode Go; the `judge` role now prefers it on OpenCode Go and Zen logins over OpenRouter's paid Jev and chat models, falling back to Zen's `jev-1.14`
 
 ### Fixed
 
@@ -448,13 +459,6 @@
 ### Added
 
 - Added LM Studio decision models to discovery: models LM Studio reports as `type: "decision"` are listed as `judge` models served over its `/v1/decisions` endpoint, alongside its chat models ([#17169](https://github.com/can1357/oh-my-pi/pull/17169) by [@richiestanaway](https://github.com/richiestanaway))
-### Added
-
-- Added Munito (`munito`) as an open-model provider: OpenAI-compatible chat completions at `api.munito.ai/inference/v1` with keyless-authoritative `/models` discovery that owns the chat roster and its retirement, the roster-derived judge lanes (rebased onto a configured endpoint, pruned when the roster drops them), canonical-reference hydration, and `omp login munito` ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
-
-### Changed
-
-- Munito chat completions now send the session-stable `prompt_cache_key`, so a cached prefix routes to the host that holds it; the tier rejects `prompt_cache_retention`, so no breakpoint or TTL is requested
 
 ## [18.13.1] - 2026-10-27
 
