@@ -194,6 +194,9 @@
 - Fixed native compaction token estimates counting opaque encrypted-state bytes as conversation text ([#16904](https://github.com/can1357/oh-my-pi/pull/16904) by [@eggpeat](https://github.com/eggpeat))
 - Fixed split-turn compaction leaving `session.compacting` context out of the turn-prefix summary ([#16707](https://github.com/can1357/oh-my-pi/pull/16707) by [@integrITsolutions](https://github.com/integrITsolutions))
 - Fixed compaction failing as a whole, and discarding the completed summary, when the optional short summary fails or returns no answer; the compaction now completes without a short summary, and cancellation still cancels it ([#16942](https://github.com/can1357/oh-my-pi/pull/16942) by [@Mouriya-Emma](https://github.com/Mouriya-Emma))
+### Changed
+
+- `CompactionSettings.localMethodsOnly` stops the effective reserve scaling with the window when no configured method summarizes: the default is capped at `DEFAULT_RESERVE_TOKENS` and an explicit `reserveTokens` is used exactly, including below the 15% floor
 
 ## [18.12.4] - 2026-10-20
 

@@ -8,6 +8,11 @@
 
 ### Added
 - Added LFM3-1.7B as an on-device chat model: `local/lfm3-1.7b` (256K context, reasoning-capable, ONNX q4) backs the `smol` role, local chat now serves any worker-registered model, and Transformers.js moves to 4.3.2 for the LFM3 architecture
+### Changed
+
+- The auto-compaction reserve now stops scaling with the window when every configured method is local (`snapcompact`/`shake`): the default stays at 16K instead of 15% (30K on a 200K window, 150K on 1M), and an explicit `compaction.reserveTokens` is honored exactly instead of being floored to 15% — there is no summarizer request for that floor to fit
+
+### Added
 
 - Dictation now works with xAI speech-to-text models such as `xai-oauth/grok-voice-transcribe-2.0` ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
 

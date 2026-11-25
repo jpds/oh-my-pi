@@ -14,6 +14,7 @@ import {
 import type { ContextWindowTiers } from "../config/model-registry";
 import type { ScopeLike } from "../config/registry";
 import type { Settings } from "../config/settings";
+import { hasOnlyLocalCompactionMethods } from "./compaction-methods";
 import {
 	type CompactionSettings,
 	cfgCompaction,
@@ -21,6 +22,27 @@ import {
 	cfgCompactionModelThresholdsEnabled,
 	cfgExtendedContext,
 } from "./context-settings";
+
+const LOCAL_METHODS_ONLY = new WeakMap<CompactionSettings, CompactionSettings>();
+
+/**
+ * `settings` with `localMethodsOnly` set when no configured method summarizes.
+ *
+ * The flag drives the reserve policy (`effectiveReserveTokens`), so every path
+ * that turns the policy into a trigger — automatic compaction, the context
+ * gauge, the hub preview — must derive it the same way. Cached because the
+ * trigger is read on every render and `cfgCompaction` hands out one object per
+ * settings revision.
+ */
+function withLocalMethodsOnly(settings: CompactionSettings): CompactionSettings {
+	if (!hasOnlyLocalCompactionMethods(settings.methodOrder)) return settings;
+	let applied = LOCAL_METHODS_ONLY.get(settings);
+	if (!applied) {
+		applied = { ...settings, localMethodsOnly: true };
+		LOCAL_METHODS_ONLY.set(settings, applied);
+	}
+	return applied;
+}
 
 /** The compaction policy in force for `model`: the configured policy with its `compaction.modelThresholds` entry applied. */
 export function resolveModelCompactionSettings(
@@ -30,7 +52,7 @@ export function resolveModelCompactionSettings(
 	const thresholds = cfgCompactionModelThresholdsEnabled.get(scope)
 		? cfgCompactionModelThresholds.get(scope)
 		: undefined;
-	return applyModelCompactionThreshold(cfgCompaction.get(scope), thresholds, model);
+	return withLocalMethodsOnly(applyModelCompactionThreshold(cfgCompaction.get(scope), thresholds, model));
 }
 
 /** Where auto-compaction triggers for `model` and which setting decides it, for the model hub preview. */
@@ -40,7 +62,7 @@ export function describeModelCompactionPoint(scope: ScopeLike, model: Model): Mo
 		? cfgCompactionModelThresholds.get(scope)
 		: undefined;
 	const match = matchModelCompactionThreshold(thresholds, model);
-	const settings = applyModelCompactionThreshold(configured, thresholds, model);
+	const settings = withLocalMethodsOnly(applyModelCompactionThreshold(configured, thresholds, model));
 	const contextWindow = model.contextWindow ?? 0;
 	const trigger = settings.enabled && contextWindow > 0 ? resolveTrigger(settings, contextWindow) : undefined;
 	return {
@@ -147,7 +169,12 @@ function planModelCompactionEntry(
 		if (fixed && tokens >= ceiling) error = `Must be below the ${formatWindow(ceiling)} ${max}window`;
 		if (!fixed && tokens > ceiling) error = `Must not exceed the ${formatWindow(ceiling)} ${max}window`;
 	}
-	return { settings: applied, window, opensExtended: entry !== undefined && opensExtended, error };
+	return {
+		settings: withLocalMethodsOnly(applied),
+		window,
+		opensExtended: entry !== undefined && opensExtended,
+		error,
+	};
 }
 
 /** A model entry in words, for the save message: `400,000-token base`, `fixed at 400,000 tokens`, `80% of the window`. */
