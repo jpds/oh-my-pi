@@ -336,6 +336,7 @@ import {
 	cfgTuiRenderEmbeds,
 	cfgTuiRenderSvg,
 	cfgTuiResizeScrollback,
+	cfgTuiScaleGaugeToCompaction,
 	cfgTuiTextSizing,
 	cfgTuiTight,
 	cfgTuiTitleSpinner,
@@ -512,6 +513,7 @@ const cfgLiveUiSettings = combine({
 	"statusLine.segmentOptions": cfgStatusLineSegmentOptions,
 	"statusLine.compactThinkingLevel": cfgStatusLineCompactThinkingLevel,
 	"statusLine.contextLine": cfgStatusLineContextLine,
+	"tui.scaleGaugeToCompaction": cfgTuiScaleGaugeToCompaction,
 	"git.enabled": cfgGitEnabled,
 	"advisor.enabled": cfgAdvisorEnabled,
 	"advisor.maxNotesPerUpdate": cfgAdvisorMaxNotesPerUpdate,
@@ -3644,6 +3646,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"statusLine.segmentOptions",
 				"statusLine.compactThinkingLevel",
 				"statusLine.contextLine",
+				"tui.scaleGaugeToCompaction",
 				"git.enabled",
 			)
 		) {

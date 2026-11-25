@@ -63,6 +63,8 @@ export interface StatusLineSettings {
 	 *  usage. `embedded` moves configured context segments into the annotated
 	 *  gauge as percentage and window labels. Box composer only. */
 	contextLine?: ContextLineMode;
+	/** Measure the gauge toward the auto-compaction cutoff instead of the full context window. */
+	scaleGaugeToCompaction?: boolean;
 }
 
 export interface SegmentContext {
