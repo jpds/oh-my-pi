@@ -2,12 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed catalog generation baking capability-less discovery rows (e.g. Munito's `/models` entries) with the provisional effort ladder instead of the reviewed provider ladder once reasoning capability is known.
+
 ### Removed
 
 - Removed unused exports `hasQuotaTierPolicy` (`/compat/behavior`), `hasRoutingVariants` (`/compat/taxonomy`), `toFirepassPublicModelId` (`/fireworks-model-id`), `isAzureDeploymentsUrl` (`/hosts`) and `toPositiveNumberOrNull` (`/utils`) ([#20528](https://github.com/can1357/oh-my-pi/pull/20528))
 
 ### Added
 - Added `local/lfm3-1.7b` (LFM3 1.7B) as a chat-kind on-device model with a 256K context, so the `smol` role can run it through the local inference worker
+- Added Vercel AI Gateway `type: "evaluation"` discovery as `api: typesafe` judge models (e.g. `vercel-ai-gateway/typesafe-ai/jev`); the catalog supplies their `/v1/evaluate` judgment defaults at build time, so no user config is needed ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
+- Added `Model.judgment` (`JudgmentConfig`: `route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) declaring per-model System One judgment endpoint overrides, honored for custom providers and `modelOverrides` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
 
 - Added ArkaneCloud provider: `/login arkanecloud` with `ARKANECLOUD_API_KEY`, models and prices discovered live per API key ([#20506](https://github.com/can1357/oh-my-pi/pull/20506) by [@Randyopo](https://github.com/Randyopo))
 

@@ -19,12 +19,17 @@
 - Dictation now works with xAI speech-to-text models such as `xai-oauth/grok-voice-transcribe-2.0` ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
 
 ### Changed
+- Added per-model (and provider-level) `judgment` overrides (`route`, `typeField`, `typeMap`, `valueMap`, `usageMap`) so `typesafe`-family models can answer System One judgments on compatible endpoints such as the Vercel AI Gateway's `/v1/evaluate` ([#15006](https://github.com/can1357/oh-my-pi/pull/15006) by [@szavadsky](https://github.com/szavadsky)).
 - Eval kernels judge without the tool bridge: when the judge role resolves to a native System One judge, its transport is injected as `PI_JUDGE_DIRECT` and Python `judge`/`judge_batch` call the provider directly, so judgment works in sandboxes that refuse loopback TCP.
 - `PI_NO_TOOL_BRIDGE=1` skips the eval tool bridge entirely (no listener, no `PI_TOOL_BRIDGE_*` kernel env); host-mediated helpers fail fast with a typed, actionable error instead of dialing an unreachable endpoint.
 
 - Dictation now works with xAI speech-to-text models such as `xai-oauth/grok-voice-transcribe-2.0` ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
 
 ### Changed
+- `judge_batch`/`judgeBatch` consumption is consistent: `results()` returns `{key: item}` in the same item shape `drain()` yields (successes and failures; was `{key: answers}`), Python `JudgmentItem` is a dict so `json.dumps(list(b.drain()))` and `json.dumps(b.results())` work, `drain()` always returns a list, and the Python batch is awaitable so `await judge_batch(...)` also works
+- `judge_batch`/`judgeBatch` item keys are strings in both runtimes: `drain()` tuples, `item.key`, and the `results()`/`failed()` dict keys agree for list-form states, whose indices were numbers in `drain()` and strings in `results()`.
+- `judge_batch`/`judgeBatch` `drain()` no longer raises `judge_batch cancelled` for a cancelled run that still met `min_ok`; `cancel()` stops further dispatch (in-flight items finish, unstarted ones settle as `cancelled`).
+- `judge_batch`/`judgeBatch` `status().elapsedS` freezes when the run settles instead of reporting time since start.
 - Python `judge_batch` runs kernel-locally in direct mode: batches live in the kernel (survive across cells via `judge_batch.attach(id)` within the kernel) rather than host-side; usage is not priced into session cost ledgers for direct judgment calls.
 - Bridge connection failures in eval cells surface as a typed error naming the endpoint and session (`eval tool bridge unreachable at …`) instead of a bare `URLError: Connection refused`.
 - The `Python tool bridge listening` line is now durable (info-level) and the stop is logged too, so an unreachable bridge is diagnosable from the session log.
@@ -36,6 +41,8 @@
 
 ### Fixed
 - Added `mnemopi.embeddingCacheDir`, pointing local embedding model loads (and the machine-shared embedding server keyed on them) at a specific fastembed cache dir instead of `~/.omp/cache/fastembed`. Intended for pinned model stores in images or containers: a read-only dir missing model files fails init with a warning rather than downloading, while a writable dir is populated on demand.
+- `judge()`/`judgeBatch()` questions accept a list of `{id, ...question}` entries keyed on the embedded id, and a wrong shape fails with a message stating the expected one instead of an opaque kernel TypeError
+- Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
 
 - Resuming or rewinding a session with an aborted task result no longer throws while the transcript renders; the card shows the cancellation text ([#20533](https://github.com/can1357/oh-my-pi/pull/20533) by [@g0spel](https://github.com/g0spel))
 - Save in Plan Review now accepts a custom path and shows where the plan was saved without requiring you to dismiss the review ([#20539](https://github.com/can1357/oh-my-pi/issues/20539)).

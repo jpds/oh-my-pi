@@ -208,7 +208,7 @@ behavior {
 		substring="whisper" substring="realtime" substring="/dall-e" substring="/gpt-image-" substring="moderation"
 	// Munito's OCR SKUs only serve the document API, not chat.
 	exclude-models provider="munito" exact="munito/ocr-auto" exact="munito/ocr-fast" \
-		exact="lightonai/lightonocr-2-1b"
+		prefix="lightonai/lightonocr-"
 	// SuperGrok's roster interleaves media models the chat picker cannot
 	// serve; the dedicated tool surfaces route them instead.
 	exclude-models provider="xai-oauth" exact="grok-imagine-image-quality" exact="grok-imagine-image-2.0" \

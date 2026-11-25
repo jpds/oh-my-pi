@@ -35,7 +35,15 @@ describe("Vercel AI Gateway provider", () => {
 		});
 
 		const models = await options.fetchDynamicModels?.();
-		expect(models?.map(model => model.id)).toEqual(["google/gemini-4-neon"]);
+		// Bundled judge seeds ride every Vercel discovery result; the discovered
+		// chat row proves the bearer-less retry succeeded.
+		expect(models?.map(model => model.id)).toEqual([
+			"google/gemini-4-neon",
+			"typesafe-ai/jev",
+			"microsoft/microsoft-decision-1",
+			"liquid/d1",
+			"openai/gpt-6-luna-decisions",
+		]);
 		expect(requests).toEqual(["Bearer revoked", undefined]);
 	});
 

@@ -21,7 +21,7 @@
  */
 import { isRecord } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
-import { type Answer, type Question, tokenUsage } from "./types";
+import { type Answer, type JudgmentRequest, type Question, type Questions, tokenUsage } from "./types";
 import { finiteNumber, type JudgmentWire } from "./wire";
 
 /** Wire key of the question at `index` in request order. */
@@ -114,7 +114,7 @@ export const googleDecisionsWire: JudgmentWire = {
 	},
 	ignoresImageDetail: true,
 	target: (baseUrl, _model, key) => ({ url: `${baseUrl}/decisions`, token: key, tokenHeader: "x-goog-api-key" }),
-	encode: (request, model) => {
+	encode: (request: JudgmentRequest<Questions>, model) => {
 		const state = typeof request.state === "string" ? request.state : JSON.stringify(request.state);
 		const questions: Record<string, unknown> = {};
 		let index = 0;
