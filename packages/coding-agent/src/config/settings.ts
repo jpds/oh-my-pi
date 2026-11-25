@@ -2986,7 +2986,12 @@ export class Settings {
 		this.#projectSettingsWarningsSeen = result.warningsSeen;
 	}
 
-	/** Reads a strict config-file family left to right, later files deep-merged over earlier ones. */
+	/**
+	 * Reads a strict config-file family left to right, later files deep-merged over earlier ones.
+	 * Overlay files combine arrays through each setting's `merge` strategy; a declarative family is
+	 * one defaults layer, so a later file replaces an array wholesale and the layer only meets the
+	 * schema defaults when it is merged above them.
+	 */
 	async #readStrictConfigFiles(
 		files: readonly string[],
 		kind: StrictConfigKind,
@@ -2996,7 +3001,10 @@ export class Settings {
 		let settings: RawSettings = {};
 		for (const filePath of files) {
 			const layer = await this.#loadStrictConfigYaml(filePath, kind, captureLegacyChangelogVersion);
-			settings = this.#deepMerge(settings, layer, { arrays: "combine" });
+			settings =
+				kind === "overlay"
+					? this.#deepMerge(settings, layer, { arrays: "combine" })
+					: this.#deepMerge(settings, layer);
 			if (Object.hasOwn(layer, "shellPath")) shellPathSource = filePath;
 		}
 		return { settings, shellPathSource };

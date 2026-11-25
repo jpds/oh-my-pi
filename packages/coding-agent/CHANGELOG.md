@@ -9,6 +9,8 @@
 ### Added
 - Added LFM3-1.7B as an on-device chat model: `local/lfm3-1.7b` (256K context, reasoning-capable, ONNX q4) backs the `smol` role, local chat now serves any worker-registered model, and Transformers.js moves to 4.3.2 for the LFM3 architecture
 ### Changed
+- Added the `PI_CONFIG_DECLARATIVE_FILES` declarative settings layer (also `configDeclarativeFiles` on `Settings.init`): config files that load below the global config, so a deployment image can declare values the agent still overrides in-session. The settings panel shows those values in a colour of their own, rather than the colour it uses for settings you changed yourself.
+- Added the `PI_CONFIG_DECLARATIVE_FILES` declarative settings layer (also `configDeclarativeFiles` on `Settings.init`): config files that load below the global config, so a deployment image can declare values the agent still overrides in-session.
 
 - The auto-compaction reserve now stops scaling with the window when every configured method is local (`snapcompact`/`shake`): the default stays at 16K instead of 15% (30K on a 200K window, 150K on 1M), and an explicit `compaction.reserveTokens` is honored exactly instead of being floored to 15% — there is no summarizer request for that floor to fit
 
@@ -44,6 +46,7 @@
 - Added `mnemopi.embeddingCacheDir`, pointing local embedding model loads (and the machine-shared embedding server keyed on them) at a specific fastembed cache dir instead of `~/.omp/cache/fastembed`. Intended for pinned model stores in images or containers: a read-only dir missing model files fails init with a warning rather than downloading, while a writable dir is populated on demand.
 - `judge()`/`judgeBatch()` questions accept a list of `{id, ...question}` entries keyed on the embedded id, and a wrong shape fails with a message stating the expected one instead of an opaque kernel TypeError
 - Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
+- Fixed `/extensions` listing extensions configured only through the `extensions:` setting in YAML config (including the declarative `PI_CONFIG_DECLARATIVE_FILES` layer): they loaded at startup but the dashboard read only legacy `settings.json`, so they were invisible and untogglable; the native provider now resolves the effective `extensions` value from Settings, session extension roots, or the persisted config chain, and ACP `_omp/extensions` binds its Settings instance first so the declarative layer is visible there too.
 
 - Resuming or rewinding a session with an aborted task result no longer throws while the transcript renders; the card shows the cancellation text ([#20533](https://github.com/can1357/oh-my-pi/pull/20533) by [@g0spel](https://github.com/g0spel))
 - Save in Plan Review now accepts a custom path and shows where the plan was saved without requiring you to dismiss the review ([#20539](https://github.com/can1357/oh-my-pi/issues/20539)).

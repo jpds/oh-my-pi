@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
+import { cfgBashPatterns } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgProvidersMaxInFlightRequests, cfgTemperature } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -101,6 +102,16 @@ describe("settings declarative layer", () => {
 		const settings = await Settings.init({ cwd: projectDir, agentDir });
 		expect(cfgTemperature.get(settings)).toBe(0.4);
 		expect(cfgCompactionEnabled.get(settings)).toBe(false);
+	});
+
+	it("lets a later declarative config file replace an array the earlier one declares", async () => {
+		const secondPath = path.join(testDir, "declarative-2.yml");
+		await writeYaml(declarativePath, { bash: { patterns: [{ match: "first *", approval: "allow" }] } });
+		await writeYaml(secondPath, { bash: { patterns: [{ match: "second *", approval: "allow" }] } });
+		useDeclarativeFiles([declarativePath, secondPath]);
+
+		const settings = await Settings.init({ cwd: projectDir, agentDir });
+		expect(cfgBashPatterns.get(settings)).toEqual([{ match: "second *", approval: "allow" }]);
 	});
 
 	it("rejects a missing declarative config file instead of silently dropping the layer", async () => {
