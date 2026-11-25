@@ -47,6 +47,7 @@
 - `judge()`/`judgeBatch()` questions accept a list of `{id, ...question}` entries keyed on the embedded id, and a wrong shape fails with a message stating the expected one instead of an opaque kernel TypeError
 - Eval helper calls that need the tool bridge (`completion()`, `agent()`, `wait()`, `tool.*`, prelude helpers, workpool, budget) name the helper that called them and point at `judge()`/`judge_batch()` as the bridge-less alternative instead of a generic tool-bridge error.
 - Fixed `/extensions` listing extensions configured only through the `extensions:` setting in YAML config (including the declarative `PI_CONFIG_DECLARATIVE_FILES` layer): they loaded at startup but the dashboard read only legacy `settings.json`, so they were invisible and untogglable; the native provider now resolves the effective `extensions` value from Settings, session extension roots, or the persisted config chain, and ACP `_omp/extensions` binds its Settings instance first so the declarative layer is visible there too.
+- Fixed Nix deployments failing to precache local-model side runtimes offline (`error: --offline: "protobufjs" is not in the cache` when building `tiny-title-runtime`/`stt-runtime`): `@huggingface/transformers` and `sherpa-onnx-node` stay registered as optional dependencies, so `bun.lock` and `nix/bun.nix` keep the package graphs those runtimes install from.
 
 - Resuming or rewinding a session with an aborted task result no longer throws while the transcript renders; the card shows the cancellation text ([#20533](https://github.com/can1357/oh-my-pi/pull/20533) by [@g0spel](https://github.com/g0spel))
 - Save in Plan Review now accepts a custom path and shows where the plan was saved without requiring you to dismiss the review ([#20539](https://github.com/can1357/oh-my-pi/issues/20539)).
@@ -69,6 +70,9 @@
 - The cache miss marker (`display.cacheMissMarker`) now appears on providers that report `cacheRead` but never `cacheWrite`, such as Gemini, Fireworks and the aggregators proxying them; requiring a write had suppressed every miss on those models
 
 ### Removed
+
+### Removed
+- Fixed Nix deployments failing to precache local-model side runtimes offline (`error: --offline: "protobufjs" is not in the cache` when building `tiny-title-runtime`/`stt-runtime`): `@huggingface/transformers` and `sherpa-onnx-node` stay registered as optional dependencies, so `bun.lock` and `nix/bun.nix` keep the package graphs those runtimes install from. The graphs resolve to the same versions as before the v18.18.8 merge (`@huggingface/jinja` 0.5.10, `sharp` 0.35.4 plus `@img/*`, `global-agent` 4.1.3), so a precache built against the previous release keeps resolving; re-adding the dependencies after the merge had silently re-resolved them to newer caret-compatible releases.
 
 - Removed unused `parse*Args`/`print*Help` exports from `@oh-my-pi/pi-coding-agent/cli/{config,grep,plugin,setup,shell,web-search,update}-cli`; the subcommands parse flags through `src/commands/*` ([#20526](https://github.com/can1357/oh-my-pi/pull/20526))
 
